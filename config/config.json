@@ -1,0 +1,28 @@
+{
+    "name": "Main",
+    "nodetype": "Router",
+    "pubkey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2++QyBF/ozruFxnJraz2rznWuXhHBy9Rliq2OvCTJEo3KfaX4dqE3OYd3MmIR0QdXPVvJ9//m8tAs1zfBuRf0yHhK3rOl2KPycTSU3KJX/t2RStPiyYKuZQFbRmbAi1L40/kxeZ/+7aL4JCtCc9nqR+yAPpxWdu9CIy/9TVXTypAnHUvpS9jJZkyICUEQw2cb/jSzYnxSIXdUUl/6GbX+kOTSvgl5o2d5oNN44njiODeUsHg6DpKCHEnswYIw1m5vRvVdwKWo9oFmYVlHW5llVOfK172UNfAY/XAnv9xi26CJdr0RqLFDJkDjwu9ccZcCjb1UVFEvnMn/40VXQhXfQIDAQAB",
+    "address": "localhost",
+    "listen_port": 3000,
+    "public_port": 3000,
+    "secure": true,
+    "strict": false,
+    "min_hashcash": 20,
+    "suggested_hashcash": 30,
+    "peers": [
+        {
+            "pubkey": "asshfhi",
+            "address": "localhost",
+            "public_port": 3001,
+            "secure": false,
+            "strict": false
+        },
+        {
+            "pubkey": "asshfhi",
+            "address": "localhost",
+            "public_port": 3002,
+            "secure": false,
+            "strict": false
+        }
+    ]
+}

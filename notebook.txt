@@ -1,0 +1,23 @@
+so, here is the thing
+
+Node1             Node2
+
+Node1->Node2 Encrypted(Ping)
+Node2->Node1 Encrypted(Pong)
+
+
+
+
+
+Message schema
+
+PUBKEY
+PAYLOAD
+HASHCASH
+
+//TODO: use blobs instead of json+base64
+
+Final unwrap
+
+FROM
+
