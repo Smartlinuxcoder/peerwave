@@ -14,10 +14,17 @@ Message schema
 PUBKEY
 PAYLOAD
 HASHCASH
+|
+bincode serialize
+|
+encrypt
+
 
 //TODO: use blobs instead of json+base64
 
 Final unwrap
 
 FROM
+
+
 

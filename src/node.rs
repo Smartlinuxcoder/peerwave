@@ -1,8 +1,11 @@
 use base64::{Engine as _, engine::general_purpose};
 use rsa::{
-    RsaPrivateKey, RsaPublicKey,
-    pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey},
+    pkcs1v15::{Signature, SigningKey, VerifyingKey},
+    pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey},
     rand_core::OsRng,
+    sha2::Sha256,
+    signature::{Signer, Verifier, SignatureEncoding},
+    RsaPrivateKey, RsaPublicKey,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -13,7 +16,8 @@ pub struct Node {
     pub name: String,
     pub nodetype: String,
     pub pubkey: String,
-    privkey: Option<String>,
+    #[serde(default)]
+    privkey: String,
     pub address: String,
     pub listen_port: Option<u16>,
     pub public_port: u16,
@@ -21,9 +25,10 @@ pub struct Node {
     pub strict: Option<bool>,
     pub min_hashcash: Option<usize>,
     pub suggested_hashcash: Option<usize>,
-    pub last_seen: Option<usize>,
     pub version: Option<String>,
     pub peers: Option<Vec<PublicNode>>,
+    pub ping_interval: usize,
+    pub max_retries: usize,
 }
 
 impl Node {
@@ -39,7 +44,7 @@ impl Node {
             if let Some(parent) = Path::new(private_key_path).parent() {
                 fs::create_dir_all(parent).expect("Failed to create config directory");
             }
-            if node.privkey.is_none() {
+            if node.privkey.is_empty() {
                 let mut rng = OsRng;
                 let private_key =
                     RsaPrivateKey::new(&mut rng, 2048).expect("Failed to generate RSA key");
@@ -47,11 +52,10 @@ impl Node {
                     .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
                     .expect("Failed to encode private key to PEM");
 
-                node.privkey = Some(pem_key.to_string());
+                node.privkey = pem_key.to_string();
                 fs::write(private_key_path, &pem_key).expect("Failed to write private key file");
             } else {
-                // Save existing private key from config to file
-                fs::write(private_key_path, node.privkey.as_ref().unwrap())
+                fs::write(private_key_path, &node.privkey)
                     .expect("Failed to write private key file");
             }
         } else {
@@ -74,18 +78,17 @@ impl Node {
                 );
             }
 
-            if let Some(config_private_key) = &node.privkey {
-                if config_private_key != &file_private_key {
+            if !node.privkey.is_empty() {
+                if node.privkey != file_private_key {
                     panic!("Private key mismatch between config and privateKey.pem file!");
                 }
             } else {
-                node.privkey = Some(file_private_key);
+                node.privkey = file_private_key;
             }
         }
 
-        // Always verify pubkey matches privkey when both are available
-        if let Some(privkey_pem) = &node.privkey {
-            let private_key = RsaPrivateKey::from_pkcs8_pem(privkey_pem)
+        if !node.privkey.is_empty() {
+            let private_key = RsaPrivateKey::from_pkcs8_pem(&node.privkey)
                 .expect("Failed to parse private key");
             let public_key = RsaPublicKey::from(&private_key);
             let public_key_der = public_key
@@ -101,6 +104,16 @@ impl Node {
         }
 
         Ok(node)
+    }
+    pub fn sign(&self, data: &[u8]) -> String {
+        if self.privkey.is_empty() {
+            panic!("Private key not found for signing");
+        }
+        let private_key =
+            RsaPrivateKey::from_pkcs8_pem(&self.privkey).expect("Failed to parse private key");
+        let signing_key = SigningKey::<Sha256>::new(private_key);
+        let signature = signing_key.sign(data);
+        general_purpose::STANDARD.encode(signature.to_vec())
     }
 }
 
@@ -138,11 +151,29 @@ impl From<&Node> for PublicNode {
             public_port: node.public_port,
             secure: node.secure,
             strict: node.strict,
+            last_seen: None,
             min_hashcash: node.min_hashcash,
             suggested_hashcash: node.suggested_hashcash,
-            last_seen: node.last_seen,
             version: node.version.clone(),
             peers: node.peers.clone(),
         }
     }
+}
+
+pub fn verify_signature(
+    pubkey_b64: &str,
+    signature_b64: &str,
+    data: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pubkey_der = general_purpose::STANDARD.decode(pubkey_b64)?;
+    let public_key = RsaPublicKey::from_public_key_der(&pubkey_der)?;
+
+    let signature_bytes = general_purpose::STANDARD.decode(signature_b64)?;
+    let signature = Signature::try_from(signature_bytes.as_slice())?;
+
+    let verifying_key = VerifyingKey::<Sha256>::new(public_key);
+
+    verifying_key.verify(data, &signature)?;
+
+    Ok(())
 }
