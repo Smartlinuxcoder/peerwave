@@ -1,11 +1,16 @@
+use aes_gcm::{
+    Aes256Gcm, Nonce,
+    aead::{Aead, AeadCore, KeyInit},
+};
 use base64::{Engine as _, engine::general_purpose};
 use rsa::{
+    RsaPrivateKey, RsaPublicKey,
     pkcs1v15::{Signature, SigningKey, VerifyingKey},
     pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey},
     rand_core::OsRng,
     sha2::Sha256,
-    signature::{Signer, Verifier, SignatureEncoding},
-    RsaPrivateKey, RsaPublicKey,
+    signature::{SignatureEncoding, Signer, Verifier},
+    traits::PublicKeyParts,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -17,9 +22,9 @@ pub struct Node {
     pub nodetype: String,
     pub pubkey: String,
     #[serde(default)]
-    privkey: String,
+    pub privkey: String,
     pub address: String,
-    pub listen_port: Option<u16>,
+    pub listen_port: u16,
     pub public_port: u16,
     pub secure: bool,
     pub strict: Option<bool>,
@@ -88,8 +93,8 @@ impl Node {
         }
 
         if !node.privkey.is_empty() {
-            let private_key = RsaPrivateKey::from_pkcs8_pem(&node.privkey)
-                .expect("Failed to parse private key");
+            let private_key =
+                RsaPrivateKey::from_pkcs8_pem(&node.privkey).expect("Failed to parse private key");
             let public_key = RsaPublicKey::from(&private_key);
             let public_key_der = public_key
                 .to_public_key_der()
@@ -114,6 +119,35 @@ impl Node {
         let signing_key = SigningKey::<Sha256>::new(private_key);
         let signature = signing_key.sign(data);
         general_purpose::STANDARD.encode(signature.to_vec())
+    }
+
+    pub fn decrypt(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        if self.privkey.is_empty() {
+            return Err("Private key not found for decryption".into());
+        }
+        let private_key =
+            RsaPrivateKey::from_pkcs8_pem(&self.privkey).expect("Failed to parse private key");
+
+        let rsa_key_size = private_key.size();
+        if data.len() < rsa_key_size + 12 {
+            return Err("Invalid encrypted data: too short".into());
+        }
+
+        let (encrypted_key, rest) = data.split_at(rsa_key_size);
+        let (nonce_bytes, ciphertext) = rest.split_at(12);
+        let nonce = Nonce::from_slice(nonce_bytes);
+
+        let padding = rsa::Pkcs1v15Encrypt;
+        let symmetric_key = private_key.decrypt(padding, encrypted_key)?;
+
+        let cipher = Aes256Gcm::new_from_slice(&symmetric_key).map_err(|e| {
+            Box::<dyn std::error::Error>::from(format!("Failed to create AES cipher: {}", e))
+        })?;
+        let decrypted_data = cipher.decrypt(nonce, ciphertext).map_err(|e| {
+            Box::<dyn std::error::Error>::from(format!("AES decryption failed: {}", e))
+        })?;
+
+        Ok(decrypted_data)
     }
 }
 
@@ -159,7 +193,6 @@ impl From<&Node> for PublicNode {
         }
     }
 }
-
 pub fn verify_signature(
     pubkey_b64: &str,
     signature_b64: &str,
@@ -176,4 +209,29 @@ pub fn verify_signature(
     verifying_key.verify(data, &signature)?;
 
     Ok(())
+}
+
+pub fn encrypt_with_pubkey(
+    pubkey_b64: &str,
+    data: &[u8],
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let key = Aes256Gcm::generate_key(&mut OsRng);
+    let cipher = Aes256Gcm::new(&key);
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+
+    let ciphertext = cipher
+        .encrypt(&nonce, data)
+        .map_err(|e| Box::<dyn std::error::Error>::from(format!("AES encryption failed: {}", e)))?;
+
+    let pubkey_der = general_purpose::STANDARD.decode(pubkey_b64)?;
+    let public_key = RsaPublicKey::from_public_key_der(&pubkey_der)?;
+    let padding = rsa::Pkcs1v15Encrypt;
+    let encrypted_key = public_key.encrypt(&mut OsRng, padding, key.as_slice())?;
+
+    let mut combined = Vec::with_capacity(encrypted_key.len() + nonce.len() + ciphertext.len());
+    combined.extend_from_slice(&encrypted_key);
+    combined.extend_from_slice(nonce.as_slice());
+    combined.extend_from_slice(&ciphertext);
+
+    Ok(combined)
 }

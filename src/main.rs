@@ -1,6 +1,6 @@
 mod node;
 mod message;
-
+mod client;
 use node::Node;
 use node::PublicNode;
 
@@ -108,7 +108,8 @@ async fn main() {
                                     .as_secs()
                                     as usize;
                                 peer_config.last_seen = Some(now);
-                                println!("Peer info for {} updated.", peer_config.address);
+                                println!("zawg");
+                                let _ = client::connect(&peer_config);
                             }
                             Err(e) => {
                                 eprintln!(
@@ -143,7 +144,7 @@ async fn main() {
 
     let assets_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets");
 
-    let listen_port = node.lock().unwrap().listen_port.unwrap();
+    let listen_port = node.lock().unwrap().listen_port;
     let app = Router::new()
         .fallback_service(ServeDir::new(assets_dir).append_index_html_on_directories(true))
         .route("/health", get(|| async { "OK" }))
@@ -165,6 +166,7 @@ async fn main() {
     )
     .await
     .unwrap();
+
 }
 
 async fn ws_handler(
