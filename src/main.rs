@@ -1,6 +1,9 @@
 mod node;
+mod message;
+
 use node::Node;
 use node::PublicNode;
+
 use axum::{
     body::Bytes,
     extract::{State, ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade}},
@@ -20,22 +23,22 @@ use tower_http::{
     services::ServeDir,
     trace::{DefaultMakeSpan, TraceLayer},
 };
-
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
 use axum::extract::connect_info::ConnectInfo;
 use axum::extract::ws::CloseFrame;
-
 use futures_util::{sink::SinkExt, stream::StreamExt};
-
 #[derive(serde::Serialize, serde::Deserialize)]
+
+
 struct SignedPublicNode {
     node: PublicNode,
     signature: String,
 }
 
+
 #[tokio::main]
 async fn main() {
+    message::test();
     let node = Arc::new(Mutex::new(
         Node::load("config/config.json").expect("Failed to load node configuration"),
     ));
