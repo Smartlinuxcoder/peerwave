@@ -1,4 +1,4 @@
-use super::node::{self, Node, PublicNode};
+use super::node::PublicNode;
 use futures_util::{SinkExt, StreamExt};
 use std::ops::ControlFlow;
 use tokio_tungstenite::tungstenite::Utf8Bytes;

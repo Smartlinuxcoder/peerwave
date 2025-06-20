@@ -1,10 +1,5 @@
-use std::vec;
-use base64::{engine::general_purpose, Engine};
-use bincode::{config, Decode, Encode};
-use rsa::{
-    pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
-    RsaPrivateKey, RsaPublicKey,
-};
+use base64::{Engine, engine::general_purpose};
+use bincode::{Decode, Encode, config};
 
 use super::node::{self, Node};
 
@@ -28,7 +23,6 @@ pub enum Payload {
     Message(Message),
 }
 
-
 impl Payload {
     pub fn new_blob(pubkey: String, payload: Vec<u8>, hashcash: String) -> Self {
         Payload::Blob(Blob {
@@ -43,18 +37,18 @@ impl Payload {
             text,
             signature,
         })
-
     }
     pub fn new_payload(pubkeys: Vec<String>, text: String, node: &Node) -> Vec<u8> {
         let config = config::standard();
-        let signature = node
-            .sign(text.as_bytes());
-        let mut message_blob =
-            bincode::encode_to_vec(&Self::new_message(node.pubkey.clone(), text, signature), config)
-                .expect("Failed to encode message");
+        let signature = node.sign(text.as_bytes());
+        let mut message_blob = bincode::encode_to_vec(
+            &Self::new_message(node.pubkey.clone(), text, signature),
+            config,
+        )
+        .expect("Failed to encode message");
         for pubkey in pubkeys.iter().rev() {
-            let encrypted_payload =
-                node::encrypt_with_pubkey(pubkey, &message_blob).expect("Failed to encrypt payload");
+            let encrypted_payload = node::encrypt_with_pubkey(pubkey, &message_blob)
+                .expect("Failed to encrypt payload");
             message_blob = bincode::encode_to_vec(
                 &Self::new_blob(pubkey.clone(), encrypted_payload, "hashcash".to_string()),
                 config,
@@ -84,7 +78,7 @@ impl Payload {
         }
     }
 }
-
+/* 
 pub fn test() {
     let mut rng = rsa::rand_core::OsRng;
     let private_key = RsaPrivateKey::new(&mut rng, 2048).expect("Failed to generate RSA key");
@@ -110,13 +104,13 @@ pub fn test() {
         version: Some("0.1.0".to_string()),
         peers: None,
         ping_interval: 60,
-        max_retries: 3,
     };
 
     let serialized = Payload::new_payload(
         vec![test_node.pubkey.clone()],
         "Hello, Bob!".to_string(),
-        &test_node);
+        &test_node,
+    );
     //println!("Serialized Blob: {:?}", serialized);
     let config = config::standard();
     let (deserialized, _): (Payload, _) =
@@ -140,3 +134,4 @@ pub fn test() {
         }
     }
 }
+ */

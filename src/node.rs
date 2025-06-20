@@ -33,7 +33,6 @@ pub struct Node {
     pub version: Option<String>,
     pub peers: Option<Vec<PublicNode>>,
     pub ping_interval: usize,
-    pub max_retries: usize,
 }
 
 impl Node {
@@ -168,6 +167,8 @@ pub struct PublicNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggested_hashcash: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_connected: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_seen: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
@@ -185,6 +186,7 @@ impl From<&Node> for PublicNode {
             public_port: node.public_port,
             secure: node.secure,
             strict: node.strict,
+            is_connected: None,
             last_seen: None,
             min_hashcash: node.min_hashcash,
             suggested_hashcash: node.suggested_hashcash,

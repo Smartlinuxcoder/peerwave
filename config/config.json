@@ -10,7 +10,6 @@
     "min_hashcash": 20,
     "suggested_hashcash": 30,
     "ping_interval": 60,
-    "max_retries": 5,
     "peers": [
         {
             "pubkey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0blkJ8sZVNO2dwi09P8l1s+m3ZXag9YpRcHBI5LhjB6o3Y6Oi4J5qtEHOVpDXsYVOD/WofkwuO2/lcxVSQEjBU1Qo/uP9Eft1F15HuyKiBu508vALcKRNlh+LRZYSIAf2D9XAgdNjFEvSZzN551WZgBYXcvGUqELHy8ecvxQC9BifESqLxKoLIdgbvjU+LUdemqlU3bpRnY9buqLr2QBIrl9IKc4Rrq6DE8lWrNuGUJ+boGtCJRzcLB7oTdNzYxwGgpS5cEEziVn60QwM93gcq+IMLp3yd30vs1Hl+RqF1mGaXlVU+Lbwxm5R07ZcoCOiZrqvATKftwdULHVljHQdQIDAQAB",

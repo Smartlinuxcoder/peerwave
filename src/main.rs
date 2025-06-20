@@ -1,18 +1,17 @@
 mod node;
 mod message;
 mod client;
+mod server;
+mod ws_types;
+
 use node::Node;
 use node::PublicNode;
 
 use axum::{
-    body::Bytes,
-    extract::{State, ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade}},
-    response::IntoResponse,
+    extract::State,
     routing::{any, get},
-    Json,
-    Router,
+    Json, Router,
 };
-use std::ops::ControlFlow;
 use std::{
     net::SocketAddr,
     path::PathBuf,
@@ -24,9 +23,6 @@ use tower_http::{
     trace::{DefaultMakeSpan, TraceLayer},
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use axum::extract::connect_info::ConnectInfo;
-use axum::extract::ws::CloseFrame;
-use futures_util::{sink::SinkExt, stream::StreamExt};
 #[derive(serde::Serialize, serde::Deserialize)]
 
 
@@ -38,7 +34,6 @@ struct SignedPublicNode {
 
 #[tokio::main]
 async fn main() {
-    message::test();
     let node = Arc::new(Mutex::new(
         Node::load("config/config.json").expect("Failed to load node configuration"),
     ));
@@ -47,88 +42,135 @@ async fn main() {
     tokio::spawn(async move {
         let client = reqwest::Client::new();
         loop {
-            let (peers, max_retries, ping_interval) = {
+            let (peers, ping_interval) = {
                 let n = node_clone.lock().unwrap();
-                (n.peers.clone(), n.max_retries, n.ping_interval)
+                (n.peers.clone(), n.ping_interval)
             };
 
             let peer_info_futures = peers.iter().flatten().map(|peer| {
                 let client = client.clone();
-                let protocol = if peer.secure { "https" } else { "http" };
-                let url = format!("{}://{}:{}/info", protocol, peer.address, peer.public_port);
+                let peer = peer.clone();
                 async move {
-                    let mut retries = 0;
-                    while retries < max_retries {
-                        match client.get(&url).send().await {
-                            Ok(response) => match response.json::<SignedPublicNode>().await {
-                                Ok(signed_node) => return Some(signed_node),
-                                Err(_) => retries += 1,
-                            },
-                            Err(_) => retries += 1,
-                        }
-                        tokio::time::sleep(std::time::Duration::from_secs(ping_interval as u64))
-                            .await;
+                    if peer.is_connected == Some(true) {
+                        return Ok(None);
                     }
-                    None
+                    let protocol = if peer.secure { "https" } else { "http" };
+                    let url =
+                        format!("{}://{}:{}/info", protocol, peer.address, peer.public_port);
+                    match client.get(&url).send().await {
+                        Ok(response) => match response.json::<SignedPublicNode>().await {
+                            Ok(signed_node) => Ok(Some(signed_node)),
+                            Err(_) => Err(peer),
+                        },
+                        Err(_) => Err(peer),
+                    }
                 }
             });
 
             let results = futures::future::join_all(peer_info_futures).await;
             for result in results {
-                if let Some(signed_node) = result {
-                    println!(
-                        "Successfully fetched info for peer: {:?}",
-                        signed_node.node.address
-                    );
-                    let node_info_json = match serde_json::to_string(&signed_node.node) {
-                        Ok(json) => json,
-                        Err(e) => {
-                            eprintln!("Failed to serialize received public node: {}", e);
+                match result {
+                    Ok(Some(signed_node)) => {
+                        println!(
+                            "Successfully fetched info for peer: {:?}",
+                            signed_node.node.address
+                        );
+                        let node_info_json = match serde_json::to_string(&signed_node.node) {
+                            Ok(json) => json,
+                            Err(e) => {
+                                eprintln!("Failed to serialize received public node: {}", e);
+                                continue;
+                            }
+                        };
+
+                        let mut node_guard = node_clone.lock().unwrap();
+                        if signed_node.node.pubkey == node_guard.pubkey {
+                            println!("Discovered self. Removing from peer list as it is redundant.");
+                            if let Some(peers) = node_guard.peers.as_mut() {
+                                peers.retain(|p| p.pubkey != signed_node.node.pubkey);
+                            }
                             continue;
                         }
-                    };
+                        let self_pubkey = node_guard.pubkey.clone();
+                        let peer_index = node_guard
+                            .peers
+                            .as_ref()
+                            .and_then(|p| p.iter().position(|p| p.pubkey == signed_node.node.pubkey));
 
-                    let mut node_guard = node_clone.lock().unwrap();
-                    if let Some(peer_config) = node_guard
-                        .peers
-                        .as_mut()
-                        .and_then(|p| p.iter_mut().find(|p| p.pubkey == signed_node.node.pubkey))
-                    {
-                        match node::verify_signature(
-                            &peer_config.pubkey,
-                            &signed_node.signature,
-                            node_info_json.as_bytes(),
-                        ) {
-                            Ok(_) => {
-                                println!("Signature from peer {} is valid.", peer_config.address);
-                                *peer_config = signed_node.node.clone();
-                                let now = SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .expect("You time traveler!")
-                                    .as_secs()
-                                    as usize;
-                                peer_config.last_seen = Some(now);
-                                println!("zawg");
-                                let _ = client::connect(&peer_config);
+                        if let Some(index) = peer_index {
+                            let (peer_pubkey, peer_address) = {
+                                let peer = &node_guard.peers.as_ref().unwrap()[index];
+                                (peer.pubkey.clone(), peer.address.clone())
+                            };
+
+                            match node::verify_signature(
+                                &peer_pubkey,
+                                &signed_node.signature,
+                                node_info_json.as_bytes(),
+                            ) {
+                                Ok(_) => {
+                                    println!(
+                                        "Signature from peer {} is valid.",
+                                        peer_address
+                                    );
+
+                                    if let Some(remote_peers) = signed_node.node.peers.clone() {
+                                        if let Some(local_peers) = node_guard.peers.as_mut() {
+                                            for remote_peer in remote_peers {
+                                                if remote_peer.pubkey == self_pubkey {
+                                                    continue;
+                                                }
+                                                if !local_peers.iter().any(|p| p.pubkey == remote_peer.pubkey) {
+                                                    local_peers.push(remote_peer);
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    let peer_config = &mut node_guard.peers.as_mut().unwrap()[index];
+                                    let mut new_peer_node = signed_node.node.clone();
+                                    if let Some(peers) = new_peer_node.peers.as_mut() {
+                                        peers.retain(|p| p.pubkey != self_pubkey);
+                                    }
+                                    *peer_config = new_peer_node;
+                                    let now = SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .expect("You time traveler!")
+                                        .as_secs()
+                                        as usize;
+                                    peer_config.last_seen = Some(now);
+                                    peer_config.is_connected = Some(true);
+                                    println!("zawg");
+                                    let _ = client::connect(peer_config);
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "Signature verification failed for peer {}: {}",
+                                        peer_address, e
+                                    );
+                                }
                             }
-                            Err(e) => {
-                                eprintln!(
-                                    "Signature verification failed for peer {}: {}",
-                                    peer_config.address, e
-                                );
-                            }
+                        } else {
+                            eprintln!(
+                                "Received info from an unknown peer with public key: {}",
+                                signed_node.node.pubkey
+                            );
                         }
-                    } else {
-                        eprintln!(
-                            "Received info from an unknown peer with public key: {}",
-                            signed_node.node.pubkey
-                        );
                     }
-                } else {
-                    println!("Failed to fetch info for a peer after max retries.");
+                    Ok(None) => {
+                        // za bluethoot device is connected
+                    }
+                    Err(failed_peer) => {
+                        println!("this peer is offline: {}:{}", failed_peer.address, failed_peer.public_port);
+                        let mut node_guard = node_clone.lock().unwrap();
+                        if let Some(peer_config) = node_guard.peers.as_mut().and_then(|p| {
+                            p.iter_mut().find(|p| p.pubkey == failed_peer.pubkey)
+                        }) {
+                            peer_config.is_connected = Some(false);
+                        }
+                    }
                 }
             }
-            let ping_interval = { node_clone.lock().unwrap().ping_interval };
             tokio::time::sleep(std::time::Duration::from_secs(ping_interval as u64)).await;
         }
     });
@@ -149,7 +191,7 @@ async fn main() {
         .fallback_service(ServeDir::new(assets_dir).append_index_html_on_directories(true))
         .route("/health", get(|| async { "OK" }))
         .route("/info", get(info_handler))
-        .route("/ws", any(ws_handler))
+        .route("/ws", any(server::ws_handler))
         .with_state(Arc::clone(&node))
         .layer(
             TraceLayer::new_for_http()
@@ -169,121 +211,6 @@ async fn main() {
 
 }
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-) -> impl IntoResponse {  
-
-    println!("{addr} connected.");
-    ws.on_upgrade(move |socket| handle_socket(socket, addr))
-}
-
-/// Actual websocket statemachine (one will be spawned per connection)
-async fn handle_socket(mut socket: WebSocket, who: SocketAddr) {
-    if socket
-        .send(Message::Ping(Bytes::from_static(&[1, 2, 3])))
-        .await
-        .is_ok()
-    {
-        println!("Pinged {who}...");
-    } else {
-        println!("Could not send ping {who}!");
-        return;
-    }
-
-    let (mut sender, mut receiver) = socket.split();
-
-    let mut send_task = tokio::spawn(async move {
-        let n_msg = 20;
-        for i in 0..n_msg {
-            if sender
-                .send(Message::Text(format!("Server message {i} ...").into()))
-                .await
-                .is_err()
-            {
-                return i;
-            }
-
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        }
-
-        println!("Sending close to {who}...");
-        if let Err(e) = sender
-            .send(Message::Close(Some(CloseFrame {
-                code: axum::extract::ws::close_code::NORMAL,
-                reason: Utf8Bytes::from_static("Goodbye"),
-            })))
-            .await
-        {
-            println!("Could not send Close due to {e}");
-        }
-        n_msg
-    });
-
-    let mut recv_task = tokio::spawn(async move {
-        let mut cnt = 0;
-        while let Some(Ok(msg)) = receiver.next().await {
-            cnt += 1;
-            // print message and break if instructed to do so
-            if process_message(msg, who).is_break() {
-                break;
-            }
-        }
-        cnt
-    });
-
-    tokio::select! {
-        rv_a = (&mut send_task) => {
-            match rv_a {
-                Ok(a) => println!("{a} messages sent to {who}"),
-                Err(a) => println!("Error sending messages {a:?}")
-            }
-            recv_task.abort();
-        },
-        rv_b = (&mut recv_task) => {
-            match rv_b {
-                Ok(b) => println!("Received {b} messages"),
-                Err(b) => println!("Error receiving messages {b:?}")
-            }
-            send_task.abort();
-        }
-    }
-
-    println!("Websocket context {who} destroyed");
-}
-
-fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
-    match msg {
-        Message::Text(t) => {
-            println!(">>> {who} sent str: {t:?}");
-        }
-        Message::Binary(d) => {
-            println!(">>> {who} sent {} bytes: {d:?}", d.len());
-        }
-        Message::Close(c) => {
-            if let Some(cf) = c {
-                println!(
-                    ">>> {who} sent close with code {} and reason `{}`",
-                    cf.code, cf.reason
-                );
-            } else {
-                println!(">>> {who} somehow sent close message without CloseFrame");
-            }
-            return ControlFlow::Break(());
-        }
-
-        Message::Pong(v) => {
-            println!(">>> {who} sent pong with {v:?}");
-        }
-        // You should never need to manually handle Message::Ping, as axum's websocket library
-        // will do so for you automagically by replying with Pong and copying the v according to
-        // spec. But if you need the contents of the pings you can see them here.
-        Message::Ping(v) => {
-            println!(">>> {who} sent ping with {v:?}");
-        }
-    }
-    ControlFlow::Continue(())
-}
 
 async fn info_handler(State(node): State<Arc<Mutex<Node>>>) -> Json<SignedPublicNode> {
     let node_guard = node.lock().unwrap();
