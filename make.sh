@@ -6,7 +6,6 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-mkdir -p node1 node2
+mkdir -p node1
 
 cp target/debug/peerwave node1/peerwave
-cp target/debug/peerwave node2/peerwave

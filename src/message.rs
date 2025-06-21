@@ -1,4 +1,3 @@
-use base64::{Engine, engine::general_purpose};
 use bincode::{Decode, Encode, config};
 
 use super::node::{self, Node};

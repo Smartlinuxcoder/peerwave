@@ -1,12 +1,11 @@
-use crate::node::{self, PublicNode};
 use base64::{engine::general_purpose, Engine};
 use rsa::rand_core::{OsRng, RngCore};
 use bincode::{config, Decode, Encode};
-use crate::node::{Node, verify_signature};
+use crate::node::{Node, PublicNode, verify_signature};
 use std::time::{SystemTime, UNIX_EPOCH};
 use axum::body::Bytes;
 
-#[derive(Encode, Decode, PartialEq, Debug)]
+#[derive(Encode, Decode, PartialEq, Debug, Clone)]
 pub struct AuthRequest {
     pub to: String, // receiving guy
     pub salt: String, // random tomfoolery 
@@ -24,7 +23,7 @@ pub struct ConnectionState {
     pub auth_salt: String,
 }
 #[derive(Encode, Decode, PartialEq, Debug)]
-enum AuthPayload {
+pub enum AuthPayload {
     Request(AuthRequest),
     Response(AuthResponse),
 }
@@ -40,17 +39,35 @@ impl ConnectionState {
             auth_salt: general_purpose::STANDARD.encode(salt_bytes),
         }
     }
-    pub fn send_auth_request(&self, to: String, node: &Node) -> AuthPayload {
+    pub fn send_auth_request(&self, to: String, self_pubkey: &str) -> AuthPayload {
         AuthPayload::Request(AuthRequest {
-            to: to,
+            to,
             salt: self.auth_salt.clone(),
-            pubkey: node.pubkey.clone(),
+            pubkey: self_pubkey.to_string(),
         })
     }
+
+    pub fn handle_auth_request(
+        &mut self,
+        request: AuthRequest,
+        node: &Node,
+    ) -> Result<AuthPayload, String> {
+        let signature = node.sign(request.salt.as_bytes());
+        let response = AuthResponse {
+            pubkey: node.pubkey.clone(),
+            signature,
+        };
+
+        self.authenticated = true;
+        self.peer_pubkey = Some(request.pubkey);
+
+        Ok(AuthPayload::Response(response))
+    }
+
     pub fn handle_auth_response(
         &mut self,
         response: AuthResponse,
-        node: &Node,
+        peers: Option<&Vec<PublicNode>>,
     ) -> Result<(), String> {
         if verify_signature(
             &response.pubkey,
@@ -62,11 +79,7 @@ impl ConnectionState {
             return Err("Invalid signature in auth response".to_string());
         }
 
-        if node
-            .peers
-            .as_ref()
-            .map_or(false, |p| p.iter().any(|p| p.pubkey == response.pubkey))
-        {
+        if peers.map_or(false, |p| p.iter().any(|p| p.pubkey == response.pubkey)) {
             self.peer_pubkey = Some(response.pubkey);
             self.authenticated = true;
             Ok(())
@@ -79,7 +92,7 @@ impl ConnectionState {
     }
 }
 
-pub fn handle_bin_message(bytes: Bytes, conn_state: &mut ConnectionState, node: &mut Node) {
+pub fn update_peer_last_seen(conn_state: &ConnectionState, node: &mut Node) {
     if conn_state.authenticated {
         if let Some(pubkey) = &conn_state.peer_pubkey {
             if let Some(peer) = node

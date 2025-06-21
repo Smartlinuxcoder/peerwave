@@ -5,7 +5,7 @@ mod server;
 mod ws_types;
 
 use node::Node;
-use node::PublicNode;
+use node::{PublicNode, SignedPublicNode};
 
 use axum::{
     extract::State,
@@ -23,13 +23,6 @@ use tower_http::{
     trace::{DefaultMakeSpan, TraceLayer},
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-#[derive(serde::Serialize, serde::Deserialize)]
-
-
-struct SignedPublicNode {
-    node: PublicNode,
-    signature: String,
-}
 
 
 #[tokio::main]
@@ -140,8 +133,11 @@ async fn main() {
                                         as usize;
                                     peer_config.last_seen = Some(now);
                                     peer_config.is_connected = Some(true);
-                                    println!("zawg");
-                                    let _ = client::connect(peer_config);
+                                    let destination = peer_config.clone();
+                                    let client_node_clone = Arc::clone(&node_clone);
+                                    tokio::spawn(async move {
+                                        client::connect(destination, client_node_clone).await;
+                                    });
                                 }
                                 Err(e) => {
                                     eprintln!(

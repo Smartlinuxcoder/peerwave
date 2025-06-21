@@ -1,11 +1,11 @@
-use crate::node::Node;
-use crate::ws_types::{self, ConnectionState};
+use crate::node::{Node, PublicNode, SignedPublicNode};
+use crate::ws_types::{self, AuthPayload, ConnectionState};
 use axum::{
     body::Bytes,
     extract::State,
     extract::{
         connect_info::ConnectInfo,
-        ws::{CloseFrame, Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
+        ws::{Message, WebSocket, WebSocketUpgrade},
     },
     response::IntoResponse,
 };
@@ -16,6 +16,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::mpsc;
 
 pub async fn ws_handler(
     State(node): State<Arc<Mutex<Node>>>,
@@ -40,31 +41,15 @@ async fn handle_socket(node: Arc<Mutex<Node>>, mut socket: WebSocket, who: Socke
     }
 
     let (mut sender, mut receiver) = socket.split();
+    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+
     let mut send_task = tokio::spawn(async move {
-        let n_msg = 20;
-        for i in 0..n_msg {
-            if sender
-                .send(Message::Text(format!("Server message {i} ...").into()))
-                .await
-                .is_err()
-            {
-                return i;
+        while let Some(msg) = rx.recv().await {
+            if sender.send(msg).await.is_err() {
+                println!("Client disconnected.");
+                break;
             }
-
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
-
-        println!("Sending close to {who}...");
-        if let Err(e) = sender
-            .send(Message::Close(Some(CloseFrame {
-                code: axum::extract::ws::close_code::NORMAL,
-                reason: Utf8Bytes::from_static("Goodbye"),
-            })))
-            .await
-        {
-            println!("Could not send Close due to {e}");
-        }
-        n_msg
     });
 
     let node_clone = Arc::clone(&node);
@@ -72,33 +57,52 @@ async fn handle_socket(node: Arc<Mutex<Node>>, mut socket: WebSocket, who: Socke
         let mut cnt = 0;
         while let Some(Ok(msg)) = receiver.next().await {
             cnt += 1;
-            // print message and break if instructed to do so
             let mut node_guard = node_clone.lock().unwrap();
-            if process_message(msg, who, &mut conn_state, &mut node_guard).is_break() {
+            if process_message(msg, who, &mut conn_state, &mut node_guard, &tx).is_break() {
                 break;
             }
         }
-        cnt
+        (cnt, conn_state)
     });
 
-    tokio::select! {
+    let conn_state = tokio::select! {
         rv_a = (&mut send_task) => {
             match rv_a {
-                Ok(a) => println!("{a} messages sent to {who}"),
-                Err(a) => println!("Error sending messages {a:?}")
+                Ok(_) => println!("Send task for {who} finished."),
+                Err(a) => println!("Error in send task for {who}: {a:?}")
             }
             recv_task.abort();
+            None
         },
         rv_b = (&mut recv_task) => {
-            match rv_b {
-                Ok(b) => println!("Received {b} messages"),
-                Err(b) => println!("Error receiving messages {b:?}")
-            }
+            let res = match rv_b {
+                Ok((b, conn_state)) => {
+                    println!("Received {b} messages from {who}, closing connection.");
+                    Some(conn_state)
+                }
+                Err(b) => {
+                    println!("Error receiving messages from {who}: {b:?}");
+                    None
+                }
+            };
             send_task.abort();
+            res
         }
-    }
+    };
 
     println!("Websocket context {who} destroyed");
+    if let Some(conn_state) = conn_state {
+        if let Some(pubkey) = conn_state.peer_pubkey {
+            let mut node_guard = node.lock().unwrap();
+            if let Some(peer) = node_guard
+                .peers
+                .as_mut()
+                .and_then(|peers| peers.iter_mut().find(|p| p.pubkey == pubkey))
+            {
+                peer.is_connected = Some(false);
+            }
+        }
+    }
 }
 
 fn process_message(
@@ -106,13 +110,113 @@ fn process_message(
     who: SocketAddr,
     conn_state: &mut ConnectionState,
     node: &mut Node,
+    tx: &mpsc::UnboundedSender<Message>,
 ) -> ControlFlow<(), ()> {
+    ws_types::update_peer_last_seen(conn_state, node);
+    let config = bincode::config::standard();
     match msg {
         Message::Text(t) => {
             println!(">>> {who} sent str: {t:?}");
+            if conn_state.authenticated {
+                if let Ok(signed_node) = serde_json::from_str::<SignedPublicNode>(&t) {
+                    println!("Received peer info from {}", signed_node.node.address);
+                    let node_info_json = match serde_json::to_string(&signed_node.node) {
+                        Ok(json) => json,
+                        Err(e) => {
+                            eprintln!("Failed to serialize received public node: {}", e);
+                            return ControlFlow::Continue(());
+                        }
+                    };
+
+                    if crate::node::verify_signature(
+                        &signed_node.node.pubkey,
+                        &signed_node.signature,
+                        node_info_json.as_bytes(),
+                    )
+                    .is_ok()
+                    {
+                        println!("Signature for received peer info is valid.");
+                        let new_peer = signed_node.node;
+                        if new_peer.pubkey == node.pubkey {
+                            return ControlFlow::Continue(());
+                        }
+                        let peers = node.peers.get_or_insert_with(Vec::new);
+                        println!("{:?}", new_peer);
+                        if !peers.iter().any(|p| p.pubkey == new_peer.pubkey) {
+                            println!("Adding new peer: {}", new_peer.address);
+                            peers.push(new_peer);
+                        }
+                    } else {
+                        eprintln!("This shouldn't happen");
+                    }
+                }
+            }
         }
         Message::Binary(d) => {
-            ws_types::handle_bin_message(d, conn_state, node);
+            if !conn_state.authenticated {
+                if let Ok((payload, _)) =
+                    bincode::decode_from_slice::<ws_types::AuthPayload, _>(&d, config)
+                {
+                    if let ws_types::AuthPayload::Request(req) = payload {
+                        println!("Received auth request from {}", req.pubkey);
+
+                        match conn_state.handle_auth_request(req.clone(), node) {
+                            Ok(auth_payload) => {
+                                let encoded_response =
+                                    bincode::encode_to_vec(auth_payload, config).unwrap();
+                                if tx.send(Message::Binary(encoded_response.into())).is_err() {
+                                    return ControlFlow::Break(());
+                                }
+                                println!(
+                                    "Authenticated peer {}",
+                                    conn_state.peer_pubkey.as_ref().unwrap()
+                                );
+
+                                if let Some(pubkey) = conn_state.peer_pubkey.as_ref() {
+                                    if let Some(peer) = node.peers.as_mut().and_then(|peers| {
+                                        peers.iter_mut().find(|p| p.pubkey == *pubkey)
+                                    }) {
+                                        peer.is_connected = Some(true);
+                                        peer.last_seen = Some(
+                                            SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .unwrap()
+                                                .as_secs()
+                                                as usize,
+                                        );
+                                    }
+                                }
+
+                                if !node.peers.as_ref().map_or(false, |p| {
+                                    p.iter().any(|peer| peer.pubkey == req.pubkey)
+                                }) {
+                                    println!(
+                                        "Peer {} not in peer list. Requesting info.",
+                                        req.pubkey
+                                    );
+                                    let info_req = "gimme info";
+                                    if tx.send(Message::Text(info_req.to_string().into())).is_err()
+                                    {
+                                        return ControlFlow::Break(());
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Auth request failed: {}", e);
+                                return ControlFlow::Break(());
+                            }
+                        }
+                    } else {
+                        println!("Received unexpected auth payload from unauthenticated peer.");
+                        return ControlFlow::Break(());
+                    }
+                } else {
+                    println!("Failed to decode binary message from unauthenticated peer.");
+                    return ControlFlow::Break(());
+                }
+            } else {
+                println!("Received binary message from authenticated peer.");
+            }
         }
         Message::Close(c) => {
             if let Some(cf) = c {

@@ -176,6 +176,12 @@ pub struct PublicNode {
     pub peers: Option<Vec<PublicNode>>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SignedPublicNode {
+    pub node: PublicNode,
+    pub signature: String,
+}
+
 impl From<&Node> for PublicNode {
     fn from(node: &Node) -> Self {
         PublicNode {
