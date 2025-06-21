@@ -136,15 +136,33 @@ fn process_message(
                     .is_ok()
                     {
                         println!("Signature for received peer info is valid.");
-                        let new_peer = signed_node.node;
+                        let mut new_peer = signed_node.node;
                         if new_peer.pubkey == node.pubkey {
                             return ControlFlow::Continue(());
                         }
-                        let peers = node.peers.get_or_insert_with(Vec::new);
-                        println!("{:?}", new_peer);
-                        if !peers.iter().any(|p| p.pubkey == new_peer.pubkey) {
+
+                        let self_pubkey = node.pubkey.clone();
+                        let local_peers = node.peers.get_or_insert_with(Vec::new);
+
+                        if let Some(remote_peers) = new_peer.peers.clone() {
+                            for remote_peer in remote_peers {
+                                if remote_peer.pubkey == self_pubkey {
+                                    continue;
+                                }
+                                if !local_peers.iter().any(|p| p.pubkey == remote_peer.pubkey) {
+                                    println!("Adding new peer from peer list: {}", remote_peer.address);
+                                    local_peers.push(remote_peer);
+                                }
+                            }
+                        }
+
+                        if let Some(peers) = new_peer.peers.as_mut() {
+                            peers.retain(|p| p.pubkey != self_pubkey);
+                        }
+
+                        if !local_peers.iter().any(|p| p.pubkey == new_peer.pubkey) {
                             println!("Adding new peer: {}", new_peer.address);
-                            peers.push(new_peer);
+                            local_peers.push(new_peer);
                         }
                     } else {
                         eprintln!("This shouldn't happen");

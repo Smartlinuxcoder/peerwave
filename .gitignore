@@ -1,5 +1,4 @@
 /target
 /node1
 /node2
-/config/config.json
-/config/privateKey.pem
+/config

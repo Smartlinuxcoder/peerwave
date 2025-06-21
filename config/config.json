@@ -12,10 +12,10 @@
     "ping_interval": 60,
     "peers": [
         {
-            "pubkey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0blkJ8sZVNO2dwi09P8l1s+m3ZXag9YpRcHBI5LhjB6o3Y6Oi4J5qtEHOVpDXsYVOD/WofkwuO2/lcxVSQEjBU1Qo/uP9Eft1F15HuyKiBu508vALcKRNlh+LRZYSIAf2D9XAgdNjFEvSZzN551WZgBYXcvGUqELHy8ecvxQC9BifESqLxKoLIdgbvjU+LUdemqlU3bpRnY9buqLr2QBIrl9IKc4Rrq6DE8lWrNuGUJ+boGtCJRzcLB7oTdNzYxwGgpS5cEEziVn60QwM93gcq+IMLp3yd30vs1Hl+RqF1mGaXlVU+Lbwxm5R07ZcoCOiZrqvATKftwdULHVljHQdQIDAQAB",
-            "address": "localhost",
-            "public_port": 3001,
-            "secure": false,
+            "pubkey": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4DlVeqxB17bMBNRsSEb5btpHw+Q4ay6fl63Ea1ZKeFui/w7iimirFsY28diXYOekzH96MVVXy2rR/Gttgp1X7d6eQLO/8KHYs+Z27nlGGp9BBiyinbXSLY3o1yaoEs9tTdsWRl2mO/Tb3quB8rzCsLMsOEOBE17DTcV0q3NMeHXVbQN/e8/fqTF0CcwTY/SNk/m0G36//xmtkYUl4qt9BklqFmt6sfQusvidhPSTsze30U86pd4IBfYOPbdbdLhu8le0WX+vp5zt6r59mlrc+duJr1MNKDwXUH73iLchMcB1dGKVMT/isyfr1YK/8RKYO24Ut3vDBxQp11PtmggIkwIDAQAB",
+            "address": "peerwave.smart.is-a.dev",
+            "public_port": 443,
+            "secure": true,
             "strict": false
         }
     ]
