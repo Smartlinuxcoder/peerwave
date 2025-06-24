@@ -9,7 +9,8 @@ use node::{PublicNode, SignedPublicNode};
 
 use axum::{
     extract::State,
-    routing::{any, get},
+    http::StatusCode,
+    routing::{any, get, post},
     Json, Router,
 };
 use std::{
@@ -23,10 +24,12 @@ use tower_http::{
     trace::{DefaultMakeSpan, TraceLayer},
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use serde::{Deserialize, Serialize};
 
 
 #[tokio::main]
 async fn main() {
+    message::test();
     let node = Arc::new(Mutex::new(
         Node::load("config/config.json").expect("Failed to load node configuration"),
     ));
@@ -187,6 +190,7 @@ async fn main() {
         .fallback_service(ServeDir::new(assets_dir).append_index_html_on_directories(true))
         .route("/health", get(|| async { "OK" }))
         .route("/info", get(info_handler))
+        .route("/send", post(send_handler))
         .route("/ws", any(server::ws_handler))
         .with_state(Arc::clone(&node))
         .layer(
@@ -222,4 +226,35 @@ async fn info_handler(State(node): State<Arc<Mutex<Node>>>) -> Json<SignedPublic
     };
 
     Json(response)
+}
+
+#[derive(Deserialize)]
+struct UserMessage {
+    to: String,
+    text: String,
+}
+
+async fn send_handler(
+    State(node): State<Arc<Mutex<Node>>>,
+    Json(payload): Json<UserMessage>,
+) -> Result<Json<message::Payload>, (StatusCode, String)> {
+    let node_guard = node.lock().unwrap();
+
+    let route = match node_guard.route_payload(payload.to) {
+        Ok(route) => route,
+        Err(e) => return Err((StatusCode::BAD_REQUEST, e)),
+    };
+
+    let message_blob = message::Payload::new_payload(route, payload.text, &node_guard);
+
+    let config = bincode::config::standard();
+    let (response_payload, _): (message::Payload, _) =
+        bincode::decode_from_slice(&message_blob, config)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    // TODO: Implement the logic to send the `response_payload`
+    // to the peer over the established connection (e.g., WebSocket).
+    println!("Created message payload: {:?}", response_payload);
+
+    Ok(Json(response_payload))
 }

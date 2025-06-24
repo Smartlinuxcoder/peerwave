@@ -2,6 +2,7 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, AeadCore, KeyInit},
 };
+use axum::extract::ws;
 use base64::{Engine as _, engine::general_purpose};
 use rsa::{
     RsaPrivateKey, RsaPublicKey,
@@ -15,6 +16,9 @@ use rsa::{
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use std::collections::{HashSet, VecDeque};
+
+use crate::ws_types;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Node {
@@ -148,6 +152,70 @@ impl Node {
 
         Ok(decrypted_data)
     }
+    pub fn route_payload(&self, destination: String) -> Result<Vec<String>, String> {
+
+        if self.pubkey == destination {
+            return Ok(vec![]);
+        }
+
+        let mut queue: VecDeque<(PublicNode, Vec<String>)> = VecDeque::new();
+        let mut visited: HashSet<String> = HashSet::new();
+
+        visited.insert(self.pubkey.clone());
+
+        if let Some(peers) = self.peers.as_ref() {
+            for peer in peers {
+                if visited.contains(&peer.pubkey) {
+                    continue;
+                }
+
+                if peer.is_connected != Some(true) {
+                    return Err(format!(
+                        "Route is no bueno: Peer {} is offline.",
+                        peer.pubkey
+                    ));
+                }
+
+                let path = vec![peer.pubkey.clone()];
+                if peer.pubkey == destination {
+                    return Ok(path);
+                }
+
+                visited.insert(peer.pubkey.clone());
+                queue.push_back((peer.clone(), path));
+            }
+        }
+
+        while let Some((current_node, path)) = queue.pop_front() {
+            if let Some(peers) = current_node.peers.as_ref() {
+                for peer in peers {
+                    if visited.contains(&peer.pubkey) {
+                        continue;
+                    }
+
+                    if peer.is_connected != Some(true) {
+                        return Err(format!(
+                            "Cannot establish route: Node {} in path is offline.",
+                            peer.pubkey
+                        ));
+                    }
+
+                    let mut new_path = path.clone();
+                    new_path.push(peer.pubkey.clone());
+
+                    if peer.pubkey == destination {
+                        println!("Route found: {:?}", new_path);
+                        return Ok(new_path);
+                    }
+
+                    visited.insert(peer.pubkey.clone());
+                    queue.push_back((peer.clone(), new_path));
+                }
+            }
+        }
+
+        Err(format!("No route found for destination: {}", destination))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +242,8 @@ pub struct PublicNode {
     pub version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peers: Option<Vec<PublicNode>>,
+    #[serde(skip_serializing, default)]
+    pub connection_state: Option<ws_types::ConnectionState>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -198,6 +268,7 @@ impl From<&Node> for PublicNode {
             suggested_hashcash: node.suggested_hashcash,
             version: node.version.clone(),
             peers: node.peers.clone(),
+            connection_state: None,
         }
     }
 }

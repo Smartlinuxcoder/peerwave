@@ -1,22 +1,28 @@
+use base64::{Engine, engine::general_purpose};
 use bincode::{Decode, Encode, config};
+use rsa::{
+    RsaPrivateKey, RsaPublicKey,
+    pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding},
+};
+use serde::{Deserialize, Serialize};
 
 use super::node::{self, Node};
 
-#[derive(Encode, Decode, PartialEq, Debug)]
+#[derive(Encode, Decode, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Blob {
-    pubkey: String,
-    payload: Vec<u8>,
-    hashcash: String,
+    pub pubkey: String,
+    pub payload: Vec<u8>,
+    pub hashcash: String,
 }
 
-#[derive(Encode, Decode, PartialEq, Debug)]
+#[derive(Encode, Decode, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Message {
-    from: String,
-    text: String,
-    signature: String,
+    pub from: String,
+    pub text: String,
+    pub signature: String,
 }
 
-#[derive(Encode, Decode, PartialEq, Debug)]
+#[derive(Encode, Decode, PartialEq, Debug, Serialize, Deserialize)]
 pub enum Payload {
     Blob(Blob),
     Message(Message),
@@ -58,9 +64,15 @@ impl Payload {
         return message_blob;
     }
 
-    pub fn unwrap_payload(&self, node: &Node) -> Result<Payload, Box<dyn std::error::Error>> {
+    pub fn unwrap_payload(
+        message: Vec<u8>,
+        node: &Node,
+    ) -> Result<Payload, Box<dyn std::error::Error>> {
         let config = config::standard();
-        match self {
+        let decrypted = node.decrypt(&message)?;
+        let (payload, _) =
+            bincode::decode_from_slice(&decrypted, config).map_err(|e| e.to_string())?;
+        match payload {
             Payload::Blob(blob) => {
                 if blob.pubkey == node.pubkey {
                     let decrypted_payload = node.decrypt(&blob.payload)?;
@@ -71,13 +83,13 @@ impl Payload {
                     Err("Public key does not match node's public key".into())
                 }
             }
-            Payload::Message(_) => {
-                Err("Payload is already a message, cannot unwrap further".into())
+            Payload::Message(message) => {
+                Ok(Payload::Message(message))
             }
         }
     }
 }
-/* 
+
 pub fn test() {
     let mut rng = rsa::rand_core::OsRng;
     let private_key = RsaPrivateKey::new(&mut rng, 2048).expect("Failed to generate RSA key");
@@ -110,19 +122,20 @@ pub fn test() {
         "Hello, Bob!".to_string(),
         &test_node,
     );
-    //println!("Serialized Blob: {:?}", serialized);
     let config = config::standard();
-    let (deserialized, _): (Payload, _) =
-        bincode::decode_from_slice(&serialized, config).expect("Failed to deserialize");
-    //println!("Deserialized Blob: {:#?}", deserialized);
-
-    match deserialized.unwrap_payload(&test_node) {
+    let (unwrapped, _) = bincode::decode_from_slice::<Payload, _>(&serialized, config)
+        .expect("Failed to decode payload");
+    // silly me of the future, remember that the bincode holds an encrypted payload, which can contain blob or message
+    // blob holds the enc payload to send, alr in bin
+    let unwrappedmaxxing =
+        get_payload_to_unwrap(unwrapped).expect("Failed to get payload to unwrap");
+    match Payload::unwrap_payload(unwrappedmaxxing.payload, &test_node) {
         Ok(unwrapped) => {
             //println!("Unwrapped payload: {:#?}", unwrapped);
             if let Payload::Message(msg) = unwrapped {
-                //println!("Message from: {}", msg.from);
-                //println!("Message text: {}", msg.text);
-                //println!("Message signature: {}", msg.signature);
+                println!("Message from: {}", msg.from);
+                println!("Message text: {}", msg.text);
+                println!("Message signature: {}", msg.signature);
                 assert_eq!(msg.text, "Hello, Bob!");
             } else {
                 panic!("Expected a message after unwrapping");
@@ -133,4 +146,12 @@ pub fn test() {
         }
     }
 }
- */
+
+fn get_payload_to_unwrap(unwrapped: Payload) -> Option<Blob> {
+    if let Payload::Blob(blob) = unwrapped {
+        return Some(blob);
+    } else {
+        println!("Not a Blob: {:?}", unwrapped);
+        None
+    }
+}

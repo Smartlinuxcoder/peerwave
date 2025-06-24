@@ -8,6 +8,7 @@ use tokio_tungstenite::{
     connect_async,
     tungstenite::protocol::Message,
 };
+use ws_types::Message as WsMessage;
 
 pub async fn connect(destination: PublicNode, node: Arc<Mutex<Node>>) {
     println!(
@@ -41,10 +42,13 @@ pub async fn connect(destination: PublicNode, node: Arc<Mutex<Node>>) {
     };
 
     let (mut sender, mut receiver) = ws_stream.split();
-    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
-
+    let (tx, mut rx) = mpsc::unbounded_channel::<WsMessage>();
     let mut send_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
+            let msg = match msg {
+                WsMessage::Text(t) => Message::Text(t.into()),
+                WsMessage::Binary(b) => Message::Binary(b.into()),
+            };
             if sender.send(msg).await.is_err() {
                 println!("Server disconnected.");
                 break;
@@ -52,7 +56,7 @@ pub async fn connect(destination: PublicNode, node: Arc<Mutex<Node>>) {
         }
     });
 
-    let mut conn_state = ConnectionState::new();
+    let mut conn_state = ConnectionState::new(tx.clone());
     let auth_payload = {
         let node_guard = node.lock().unwrap();
         conn_state.send_auth_request(destination.pubkey.clone(), &node_guard.pubkey)
@@ -60,7 +64,9 @@ pub async fn connect(destination: PublicNode, node: Arc<Mutex<Node>>) {
     let config = bincode::config::standard();
     let encoded_payload = bincode::encode_to_vec(auth_payload, config).unwrap();
 
-    if tx.send(Message::Binary(encoded_payload.into())).is_err() {
+    if tx.send(WsMessage::Binary(encoded_payload.into()))
+        .is_err()
+    {
         println!("Failed to send auth request.");
         return;
     }
@@ -69,14 +75,39 @@ pub async fn connect(destination: PublicNode, node: Arc<Mutex<Node>>) {
     let node_clone = Arc::clone(&node);
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
+            let our_msg = match msg {
+                Message::Text(t) => WsMessage::Text(t.to_string()),
+                Message::Binary(b) => WsMessage::Binary(b.to_vec()),
+                Message::Ping(v) => {
+                    println!(">>> got ping with {v:?}");
+                    continue;
+                }
+                Message::Pong(v) => {
+                    println!(">>> got pong with {v:?}");
+                    continue;
+                }
+                Message::Close(c) => {
+                    if let Some(cf) = c {
+                        println!(
+                            ">>>  got close with code {} and reason `{}`",
+                            cf.code, cf.reason
+                        );
+                    } else {
+                        println!(">>> somehow got close message without CloseFrame");
+                    }
+                    break;
+                }
+                Message::Frame(_) => {
+                    unreachable!("This is never supposed to happen")
+                }
+            };
             let mut node_guard = node_clone.lock().unwrap();
             let peers = node_guard.peers.clone();
             if process_message(
-                msg,
+                our_msg,
                 &mut conn_state,
                 &mut node_guard,
                 peers.as_ref(),
-                &tx,
             )
             .is_break()
             {
@@ -109,18 +140,19 @@ pub async fn connect(destination: PublicNode, node: Arc<Mutex<Node>>) {
 }
 
 fn process_message(
-    msg: Message,
+    msg: WsMessage,
     conn_state: &mut ConnectionState,
     node: &mut Node,
     peers: Option<&Vec<PublicNode>>,
-    tx: &mpsc::UnboundedSender<Message>,
 ) -> ControlFlow<(), ()> {
-    ws_types::update_peer_last_seen(conn_state, node);
+    if let Some(peer) = peers.and_then(|p| p.iter().find(|p| p.connection_state.is_some())) {
+        ws_types::update_peer_last_seen(node, &peer.pubkey);
+    }
     let config = bincode::config::standard();
     match msg {
-        Message::Text(t) => {
+        WsMessage::Text(t) => {
             println!(">>> got str: {t:?}");
-            if (t == "gimme info") {
+            if t == "gimme info" {
                 println!("Received info request");
                 let public_node = PublicNode::from(&node.clone());
                 let node_info_json = match serde_json::to_string(&public_node) {
@@ -141,12 +173,12 @@ fn process_message(
                         return ControlFlow::Continue(());
                     }
                 };
-                if tx.send(Message::Text(response_json.into())).is_err() {
+                if conn_state.tx.as_ref().expect("Kaboom").send(WsMessage::Text(response_json.into())).is_err() {
                     return ControlFlow::Break(());
                 }
             }
         }
-        Message::Binary(d) => {
+        WsMessage::Binary(d) => {
             if !conn_state.authenticated {
                 if let Ok((payload, _)) =
                     bincode::decode_from_slice::<ws_types::AuthPayload, _>(&d, config)
@@ -155,50 +187,18 @@ fn process_message(
                         println!("Received auth response from {}", resp.pubkey);
                         match conn_state.handle_auth_response(resp, peers) {
                             Ok(_) => {
-                                println!(
-                                    "Successfully authenticated with peer {}",
-                                    conn_state.peer_pubkey.as_ref().unwrap()
-                                );
+                                println!("Successfully authenticated with peer.");
                             }
                             Err(e) => {
                                 eprintln!("Auth response failed: {}", e);
                                 return ControlFlow::Break(());
                             }
                         }
-                    } else {
-                        println!("Received unexpected auth payload from peer.");
-                        return ControlFlow::Break(());
                     }
-                } else {
-                    println!("Failed to decode binary message from peer.");
-                    return ControlFlow::Break(());
                 }
             } else {
                 println!(">>> got {} bytes: {d:?}", d.len());
             }
-        }
-        Message::Close(c) => {
-            if let Some(cf) = c {
-                println!(
-                    ">>>  got close with code {} and reason `{}`",
-                    cf.code, cf.reason
-                );
-            } else {
-                println!(">>> somehow got close message without CloseFrame");
-            }
-            return ControlFlow::Break(());
-        }
-
-        Message::Pong(v) => {
-            println!(">>> got pong with {v:?}");
-        }
-
-        Message::Ping(v) => {
-            println!(">>> got ping with {v:?}");
-        }
-
-        Message::Frame(_) => {
-            unreachable!("This is never supposed to happen")
         }
     }
     ControlFlow::Continue(())
