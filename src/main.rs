@@ -259,7 +259,7 @@ async fn send_handler(
     {
         if let Some(conn_state) = &peer.connection_state {
             if let Some(tx) = &conn_state.tx {
-                if tx.send(ws_types::Message::Binary(message_blob)).is_err() {
+                if tx.send(ws_types::Message::Binary(routable.payload)).is_err() {
                     peer.is_connected = Some(false);
                     peer.connection_state = None;
                     return Err((
