@@ -185,9 +185,14 @@ fn process_message(
                 {
                     if let ws_types::AuthPayload::Response(resp) = payload {
                         println!("Received auth response from {}", resp.pubkey);
-                        match conn_state.handle_auth_response(resp, peers) {
+                        match conn_state.handle_auth_response(resp.clone(), peers) {
                             Ok(_) => {
                                 println!("Successfully authenticated with peer.");
+                                if let Some(peer) = node.peers.as_mut().and_then(|p| {
+                                    p.iter_mut().find(|p| p.pubkey == resp.pubkey)
+                                }) {
+                                    peer.connection_state = Some(conn_state.clone());
+                                }
                             }
                             Err(e) => {
                                 eprintln!("Auth response failed: {}", e);

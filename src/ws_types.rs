@@ -13,7 +13,7 @@ pub struct AuthRequest {
     pub salt: String, // random tomfoolery 
     pub pubkey: String, // the pubkey of sender
 }
-#[derive(Encode, Decode, PartialEq, Debug)]
+#[derive(Encode, Decode, PartialEq, Debug, Clone)]
 pub struct AuthResponse {
     pub pubkey: String, // pubkey of receiving guy
     pub signature: String, // signature from req

@@ -152,6 +152,19 @@ fn process_message(
                                     return ControlFlow::Break(());
                                 }
                                 println!("Authenticated peer.");
+
+                                let peer_exists = node.peers.as_ref().map_or(false, |p| p.iter().any(|p| p.pubkey == req.pubkey));
+                                if peer_exists {
+                                    if let Some(peer) = node.peers.as_mut().and_then(|p| p.iter_mut().find(|p| p.pubkey == req.pubkey)) {
+                                        peer.connection_state = Some(conn_state.clone());
+                                    }
+                                } else {
+                                    println!("Peer {} not found, requesting info.", req.pubkey);
+                                    if conn_state.tx.as_ref().expect("Kaboom").send(WsMessage::Text("gimme info".to_string())).is_err() {
+                                        eprintln!("Failed to send 'gimme info' request to {}", req.pubkey);
+                                        return ControlFlow::Break(());
+                                    }
+                                }
                             }
                             Err(e) => {
                                 eprintln!("Auth request failed: {}", e);
@@ -163,14 +176,27 @@ fn process_message(
             } else {
                 match Payload::unwrap_payload(d, node) {
                     Ok(unwrapped) => {
-                        //println!("Unwrapped payload: {:#?}", unwrapped);
-                        if let Payload::Message(msg) = unwrapped {
-                            println!("Message from: {}", msg.from);
-                            println!("Message text: {}", msg.text);
-                            println!("Message signature: {}", msg.signature);
-                            assert_eq!(msg.text, "Hello, Bob!");
-                        } else {
-                            panic!("Expected a message after unwrapping");
+                        match unwrapped {
+                            Payload::Blob(blob) => {
+                                if let Some(peer) = node
+                                    .peers
+                                    .as_mut()
+                                    .and_then(|peers| peers.iter_mut().find(|p| p.pubkey == blob.pubkey))
+                                {
+                                    peer.connection_state.clone().unwrap().tx
+                                        .expect("Kaboom")
+                                        .send(WsMessage::Binary(blob.payload.into()))
+                                        .expect("Failed to send blob");
+                                } else {
+                                    println!("No peer found : {}", blob.pubkey);
+                                }
+                            }
+                            Payload::Message(message) => {
+                                println!(
+                                    "Received message from {}: {}",
+                                    message.from, message.text
+                                );
+                            }
                         }
                     }
                     Err(e) => {
@@ -226,6 +252,7 @@ fn process_message(
 
                         if !local_peers.iter().any(|p| p.pubkey == new_peer.pubkey) {
                             println!("Adding new peer: {}", new_peer.address);
+                            new_peer.connection_state = Some(conn_state.clone());
                             local_peers.push(new_peer);
                         }
                     } else {
