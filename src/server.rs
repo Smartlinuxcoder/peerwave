@@ -139,13 +139,8 @@ fn process_message(
     node: &mut Node,
     authenticated_peer_pubkey: &mut Option<String>,
 ) -> ControlFlow<(), ()> {
-    if let Some(peer) = node
-        .peers
-        .as_mut()
-        .and_then(|peers| peers.iter_mut().find(|p| p.connection_state.is_some()))
-    {
-        let pubkey = peer.pubkey.clone();
-        ws_types::update_peer_last_seen(node, &pubkey);
+    if let Some(pubkey) = authenticated_peer_pubkey {
+        ws_types::update_peer_last_seen(node, pubkey);
     }
     let config = bincode::config::standard();
     match msg {
@@ -173,6 +168,7 @@ fn process_message(
                                 if peer_exists {
                                     if let Some(peer) = node.peers.as_mut().and_then(|p| p.iter_mut().find(|p| p.pubkey == req.pubkey)) {
                                         peer.connection_state = Some(conn_state.clone());
+                                        peer.is_connected = Some(true);
                                     }
                                 } else {
                                     println!("Peer {} not found, requesting info.", req.pubkey);
@@ -270,6 +266,7 @@ fn process_message(
                         if !local_peers.iter().any(|p| p.pubkey == new_peer.pubkey) {
                             println!("Adding new peer: {}", new_peer.address);
                             new_peer.connection_state = Some(conn_state.clone());
+                            new_peer.is_connected = Some(true);
                             *authenticated_peer_pubkey = Some(new_peer.pubkey.clone());
                             local_peers.push(new_peer);
                         }
