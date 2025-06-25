@@ -12,7 +12,7 @@ permissions:
 
 
 jobs:
-  build&push:
+  build_and_push:
     runs-on: ubuntu-latest
     defaults:
       run:
