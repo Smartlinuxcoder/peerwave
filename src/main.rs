@@ -237,24 +237,54 @@ struct UserMessage {
 async fn send_handler(
     State(node): State<Arc<Mutex<Node>>>,
     Json(payload): Json<UserMessage>,
-) -> Result<Json<message::Payload>, (StatusCode, String)> {
-    let node_guard = node.lock().unwrap();
+) -> Result<String, (StatusCode, String)> {
+    let mut node_guard = node.lock().unwrap();
 
     let route = match node_guard.route_payload(payload.to) {
         Ok(route) => route,
         Err(e) => return Err((StatusCode::BAD_REQUEST, e)),
     };
-
     let message_blob = message::Payload::new_payload(route, payload.text, &node_guard);
 
     let config = bincode::config::standard();
-    let (response_payload, _): (message::Payload, _) =
-        bincode::decode_from_slice(&message_blob, config)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let routable: message::Blob = match bincode::decode_from_slice(&message_blob, config) {
+        Ok((message::Payload::Blob(blob), _)) => blob,
+        _ => return Err((StatusCode::INTERNAL_SERVER_ERROR, "Silly unwrapping error".to_string())),
+    };
 
-    // TODO: Implement the logic to send the `response_payload`
-    // to the peer over the established connection (e.g., WebSocket).
-    println!("Created message payload: {:?}", response_payload);
+    if let Some(peer) = node_guard
+        .peers
+        .as_mut()
+        .and_then(|peers| peers.iter_mut().find(|p| p.pubkey == routable.pubkey))
+    {
+        if let Some(conn_state) = &peer.connection_state {
+            if let Some(tx) = &conn_state.tx {
+                if tx.send(ws_types::Message::Binary(message_blob)).is_err() {
+                    peer.is_connected = Some(false);
+                    peer.connection_state = None;
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Failed to send message to peer, connection closed.".to_string(),
+                    ));
+                }
+            } else {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Peer has no sender channel".to_string(),
+                ));
+            }
+        } else {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Peer not connected".to_string(),
+            ));
+        }
+    } else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("Peer with pubkey {} not found.", routable.pubkey),
+        ));
+    }
 
-    Ok(Json(response_payload))
+    Ok("all good sir".to_string())
 }

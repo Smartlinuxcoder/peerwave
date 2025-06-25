@@ -186,7 +186,7 @@ fn process_message(
                                     peer.connection_state.clone().unwrap().tx
                                         .expect("Kaboom")
                                         .send(WsMessage::Binary(blob.payload.into()))
-                                        .expect("Failed to send blob");
+                                        .expect("Failed to forward blob");
                                 } else {
                                     println!("No peer found : {}", blob.pubkey);
                                 }
@@ -200,7 +200,8 @@ fn process_message(
                         }
                     }
                     Err(e) => {
-                        panic!("Failed to unwrap payload: {}", e);
+                        eprintln!("Failed to unwrap payload: {}", e);
+                        return ControlFlow::Break(());
                     }
                 }
             }
