@@ -44,6 +44,7 @@ async fn handle_socket(node: Arc<Mutex<Node>>, mut socket: WebSocket, who: Socke
     let (mut sender, mut receiver) = socket.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<WsMessage>();
     let mut conn_state = ConnectionState::new(tx.clone());
+    let mut authenticated_peer_pubkey: Option<String> = None;
 
     let mut send_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -87,11 +88,19 @@ async fn handle_socket(node: Arc<Mutex<Node>>, mut socket: WebSocket, who: Socke
                 }
             };
             let mut node_guard = node_clone.lock().unwrap();
-            if process_message(our_msg, who, &mut conn_state, &mut node_guard).is_break() {
+            if process_message(
+                our_msg,
+                who,
+                &mut conn_state,
+                &mut node_guard,
+                &mut authenticated_peer_pubkey,
+            )
+            .is_break()
+            {
                 break;
             }
         }
-        cnt
+        (cnt, authenticated_peer_pubkey)
     });
 
     tokio::select! {
@@ -100,7 +109,20 @@ async fn handle_socket(node: Arc<Mutex<Node>>, mut socket: WebSocket, who: Socke
         },
         rv_b = (&mut recv_task) => {
             match rv_b {
-                Ok(cnt) => println!("Received {cnt} messages from {who}, closing connection."),
+                Ok((cnt, pubkey)) => {
+                    println!("Received {cnt} messages from {who}, closing connection.");
+                    if let Some(pubkey) = pubkey {
+                        let mut node_guard = node.lock().unwrap();
+                        if let Some(peer) = node_guard
+                            .peers
+                            .as_mut()
+                            .and_then(|peers| peers.iter_mut().find(|p| p.pubkey == pubkey))
+                        {
+                            peer.is_connected = Some(false);
+                            peer.connection_state = None;
+                        }
+                    }
+                }
                 Err(e) => println!("Error receiving messages from {who}: {e:?}"),
             }
             send_task.abort();
@@ -108,14 +130,6 @@ async fn handle_socket(node: Arc<Mutex<Node>>, mut socket: WebSocket, who: Socke
     };
 
     println!("Websocket context {who} destroyed");
-    let mut node_guard = node.lock().unwrap();
-    if let Some(peer) = node_guard
-        .peers
-        .as_mut()
-        .and_then(|peers| peers.iter_mut().find(|p| p.connection_state.is_some()))
-    {
-        peer.is_connected = Some(false);
-    }
 }
 
 fn process_message(
@@ -123,6 +137,7 @@ fn process_message(
     who: SocketAddr,
     conn_state: &mut ConnectionState,
     node: &mut Node,
+    authenticated_peer_pubkey: &mut Option<String>,
 ) -> ControlFlow<(), ()> {
     if let Some(peer) = node
         .peers
@@ -152,6 +167,7 @@ fn process_message(
                                     return ControlFlow::Break(());
                                 }
                                 println!("Authenticated peer.");
+                                *authenticated_peer_pubkey = Some(req.pubkey.clone());
 
                                 let peer_exists = node.peers.as_ref().map_or(false, |p| p.iter().any(|p| p.pubkey == req.pubkey));
                                 if peer_exists {
@@ -254,6 +270,7 @@ fn process_message(
                         if !local_peers.iter().any(|p| p.pubkey == new_peer.pubkey) {
                             println!("Adding new peer: {}", new_peer.address);
                             new_peer.connection_state = Some(conn_state.clone());
+                            *authenticated_peer_pubkey = Some(new_peer.pubkey.clone());
                             local_peers.push(new_peer);
                         }
                     } else {
