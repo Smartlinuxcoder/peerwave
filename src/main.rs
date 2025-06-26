@@ -1,35 +1,43 @@
-mod node;
-mod message;
 mod client;
-mod server;
+mod message;
+mod node;
 mod ws_types;
+
+#[cfg(not(feature = "client_only"))]
+mod server;
 
 use node::Node;
 use node::{PublicNode, SignedPublicNode};
 
+#[cfg(not(feature = "client_only"))]
 use axum::{
+    Json, Router,
     extract::State,
     http::StatusCode,
     routing::{any, get, post},
-    Json, Router,
 };
+
 use std::{
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(not(feature = "client_only"))]
 use tower_http::{
     services::ServeDir,
     trace::{DefaultMakeSpan, TraceLayer},
 };
+#[cfg(not(feature = "client_only"))]
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use serde::{Deserialize, Serialize};
 
+use serde::{Deserialize, Serialize};
 
 #[tokio::main]
 async fn main() {
-    message::test();
+    // message::test();
+
     let node = Arc::new(Mutex::new(
         Node::load("config/config.json").expect("Failed to load node configuration"),
     ));
@@ -51,8 +59,7 @@ async fn main() {
                         return Ok(None);
                     }
                     let protocol = if peer.secure { "https" } else { "http" };
-                    let url =
-                        format!("{}://{}:{}/info", protocol, peer.address, peer.public_port);
+                    let url = format!("{}://{}:{}/info", protocol, peer.address, peer.public_port);
                     match client.get(&url).send().await {
                         Ok(response) => match response.json::<SignedPublicNode>().await {
                             Ok(signed_node) => Ok(Some(signed_node)),
@@ -81,17 +88,18 @@ async fn main() {
 
                         let mut node_guard = node_clone.lock().unwrap();
                         if signed_node.node.pubkey == node_guard.pubkey {
-                            println!("Discovered self. Removing from peer list as it is redundant.");
+                            println!(
+                                "Discovered self. Removing from peer list as it is redundant."
+                            );
                             if let Some(peers) = node_guard.peers.as_mut() {
                                 peers.retain(|p| p.pubkey != signed_node.node.pubkey);
                             }
                             continue;
                         }
                         let self_pubkey = node_guard.pubkey.clone();
-                        let peer_index = node_guard
-                            .peers
-                            .as_ref()
-                            .and_then(|p| p.iter().position(|p| p.pubkey == signed_node.node.pubkey));
+                        let peer_index = node_guard.peers.as_ref().and_then(|p| {
+                            p.iter().position(|p| p.pubkey == signed_node.node.pubkey)
+                        });
 
                         if let Some(index) = peer_index {
                             let (peer_pubkey, peer_address) = {
@@ -105,10 +113,7 @@ async fn main() {
                                 node_info_json.as_bytes(),
                             ) {
                                 Ok(_) => {
-                                    println!(
-                                        "Signature from peer {} is valid.",
-                                        peer_address
-                                    );
+                                    println!("Signature from peer {} is valid.", peer_address);
 
                                     if let Some(remote_peers) = signed_node.node.peers.clone() {
                                         if let Some(local_peers) = node_guard.peers.as_mut() {
@@ -116,14 +121,18 @@ async fn main() {
                                                 if remote_peer.pubkey == self_pubkey {
                                                     continue;
                                                 }
-                                                if !local_peers.iter().any(|p| p.pubkey == remote_peer.pubkey) {
+                                                if !local_peers
+                                                    .iter()
+                                                    .any(|p| p.pubkey == remote_peer.pubkey)
+                                                {
                                                     local_peers.push(remote_peer);
                                                 }
                                             }
                                         }
                                     }
 
-                                    let peer_config = &mut node_guard.peers.as_mut().unwrap()[index];
+                                    let peer_config =
+                                        &mut node_guard.peers.as_mut().unwrap()[index];
                                     let mut new_peer_node = signed_node.node.clone();
                                     if let Some(peers) = new_peer_node.peers.as_mut() {
                                         peers.retain(|p| p.pubkey != self_pubkey);
@@ -160,11 +169,16 @@ async fn main() {
                         // za bluethoot device is connected
                     }
                     Err(failed_peer) => {
-                        println!("this peer is offline: {}:{}", failed_peer.address, failed_peer.public_port);
+                        println!(
+                            "this peer is offline: {}:{}",
+                            failed_peer.address, failed_peer.public_port
+                        );
                         let mut node_guard = node_clone.lock().unwrap();
-                        if let Some(peer_config) = node_guard.peers.as_mut().and_then(|p| {
-                            p.iter_mut().find(|p| p.pubkey == failed_peer.pubkey)
-                        }) {
+                        if let Some(peer_config) = node_guard
+                            .peers
+                            .as_mut()
+                            .and_then(|p| p.iter_mut().find(|p| p.pubkey == failed_peer.pubkey))
+                        {
                             peer_config.is_connected = Some(false);
                         }
                     }
@@ -174,44 +188,53 @@ async fn main() {
         }
     });
 
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                format!("{}=debug,tower_http=debug", env!("CARGO_CRATE_NAME")).into()
-            }),
+    #[cfg(not(feature = "client_only"))]
+    {
+        println!("Starting server");
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                    format!("{}=debug,tower_http=debug", env!("CARGO_CRATE_NAME")).into()
+                }),
+            )
+            .with(tracing_subscriber::fmt::layer())
+            .init();
+        let assets_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets");
+        let listen_port = node.lock().unwrap().listen_port;
+        let app = Router::new()
+            .fallback_service(ServeDir::new(assets_dir).append_index_html_on_directories(true))
+            .route("/health", get(|| async { "OK" }))
+            .route("/info", get(info_handler))
+            .route("/send", post(send_handler))
+            .route("/ws", any(server::ws_handler))
+            .with_state(Arc::clone(&node))
+            .layer(
+                TraceLayer::new_for_http()
+                    .make_span_with(DefaultMakeSpan::default().include_headers(true)),
+            );
+
+        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", listen_port))
+            .await
+            .unwrap();
+        tracing::debug!("listening on {}", listener.local_addr().unwrap());
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
         )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
-    let assets_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets");
-
-    let listen_port = node.lock().unwrap().listen_port;
-    let app = Router::new()
-        .fallback_service(ServeDir::new(assets_dir).append_index_html_on_directories(true))
-        .route("/health", get(|| async { "OK" }))
-        .route("/info", get(info_handler))
-        .route("/send", post(send_handler))
-        .route("/ws", any(server::ws_handler))
-        .with_state(Arc::clone(&node))
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::default().include_headers(true)),
-        );
-
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", listen_port))
         .await
         .unwrap();
-    tracing::debug!("listening on {}", listener.local_addr().unwrap());
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await
-    .unwrap();
+    }
 
+    #[cfg(feature = "client_only")]
+    {
+        println!("Running in client-only mode. Press Ctrl+C to exit.");
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen for ctrl-c");
+    }
 }
 
-
+#[cfg(not(feature = "client_only"))]
 async fn info_handler(State(node): State<Arc<Mutex<Node>>>) -> Json<SignedPublicNode> {
     let node_guard = node.lock().unwrap();
     let public_node = PublicNode::from(&*node_guard);
@@ -227,13 +250,13 @@ async fn info_handler(State(node): State<Arc<Mutex<Node>>>) -> Json<SignedPublic
 
     Json(response)
 }
-
+#[cfg(not(feature = "client_only"))]
 #[derive(Deserialize)]
 struct UserMessage {
     to: String,
     text: String,
 }
-
+#[cfg(not(feature = "client_only"))]
 async fn send_handler(
     State(node): State<Arc<Mutex<Node>>>,
     Json(payload): Json<UserMessage>,
@@ -249,7 +272,12 @@ async fn send_handler(
     let config = bincode::config::standard();
     let routable: message::Blob = match bincode::decode_from_slice(&message_blob, config) {
         Ok((message::Payload::Blob(blob), _)) => blob,
-        _ => return Err((StatusCode::INTERNAL_SERVER_ERROR, "Silly unwrapping error".to_string())),
+        _ => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Silly unwrapping error".to_string(),
+            ));
+        }
     };
 
     if let Some(peer) = node_guard
@@ -259,7 +287,10 @@ async fn send_handler(
     {
         if let Some(conn_state) = &peer.connection_state {
             if let Some(tx) = &conn_state.tx {
-                if tx.send(ws_types::Message::Binary(routable.payload)).is_err() {
+                if tx
+                    .send(ws_types::Message::Binary(routable.payload))
+                    .is_err()
+                {
                     peer.is_connected = Some(false);
                     peer.connection_state = None;
                     return Err((
