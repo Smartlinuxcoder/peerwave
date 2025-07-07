@@ -4,24 +4,43 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dioxus = { version = "0.7.0-alpha.2", features = ["router", "fullstack"] }
 axum = { version = "0.8.4", features = ["ws"], optional = true }
 axum-extra = { version = "0.10.1", features = ["typed-header"], optional = true }
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.140"
-futures = "0.3"
-futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-headers = "0.4.1"
-tokio = { version = "1.45.1", features = ["full"] }
-tokio-tungstenite = { version = "0.27.0", features = ["native-tls"] }
+serde = { version = "1.0.219", features = ["derive"], optional = true }
+serde_json = { version = "1.0.140", optional = true }
+futures = { version = "0.3", optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"], optional = true }
+headers = { version = "0.4.1", optional = true }
+tokio = { version = "1.45.1", features = ["full"], optional = true }
+tokio-tungstenite = { version = "0.27.0", features = ["native-tls"], optional = true }
 tower-http = { version = "0.6.6", features = ["fs", "trace"], optional = true }
 tracing = { version = "0.1.41", optional = true }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"], optional = true }
-rsa = { version = "0.9", features = ["sha2"] }
-base64 = "0.22.1"
-reqwest = { version = "0.12.20", features = ["json"] }
-bincode = "2.0.1"
-aes-gcm = { version = "0.10.3", features = ["getrandom"] }
+rsa = { version = "0.9", features = ["sha2"], optional = true }
+base64 = { version = "0.22.1", optional = true }
+reqwest = { version = "0.12.20", features = ["json"], optional = true }
+bincode = { version = "2.0.1", optional = true }
+aes-gcm = { version = "0.10.3", features = ["getrandom"], optional = true }
 
 [features]
-default = ["axum", "axum-extra", "tower-http", "tracing", "tracing-subscriber"]
+server = ["dioxus/server", "dep:axum", "dep:axum-extra", "dep:tower-http", "dep:tracing", "dep:tracing-subscriber", "dep:tokio", "dep:aes-gcm", "dep:serde", "dep:serde_json", "dep:futures", "dep:futures-util", "dep:headers", "dep:tokio-tungstenite", "dep:rsa", "dep:base64", "dep:reqwest", "dep:bincode"]
+default = ["web"]
+web = ["dioxus/web"]
+desktop = ["dioxus/desktop"]
+mobile = ["dioxus/mobile"]
 client_only = []
+
+
+
+[profile]
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"

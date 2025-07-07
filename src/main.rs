@@ -1,22 +1,42 @@
+#[cfg(feature = "server")]
 mod client;
+#[cfg(feature = "server")]
 mod message;
+#[cfg(feature = "server")]
 mod node;
+#[cfg(feature = "server")]
 mod ws_types;
-
-#[cfg(not(feature = "client_only"))]
+#[cfg(feature = "server")]
 mod server;
 
+mod routes;
+#[cfg(feature = "server")]
 use node::Node;
+#[cfg(feature = "server")]
 use node::{PublicNode, SignedPublicNode};
+use routes::home::Home;
+use dioxus::{document, prelude::*};
 
-#[cfg(not(feature = "client_only"))]
+#[derive(Debug, Clone, Routable, PartialEq)]
+#[rustfmt::skip]
+enum Route {
+    #[layout(Navbar)]
+    #[route("/")]
+    Home {},
+}
+
+const FAVICON: Asset = asset!("/assets/favicon.ico");
+const MAIN_CSS: Asset = asset!("/assets/main.css");
+const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
+
+#[cfg(feature = "server")]
 use axum::{
     Json, Router,
     extract::State,
     http::StatusCode,
     routing::{any, get, post},
 };
-
+#[cfg(feature = "server")]
 use std::{
     net::SocketAddr,
     path::PathBuf,
@@ -24,18 +44,20 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[cfg(not(feature = "client_only"))]
+#[cfg(feature = "server")]
 use tower_http::{
     services::ServeDir,
     trace::{DefaultMakeSpan, TraceLayer},
 };
-#[cfg(not(feature = "client_only"))]
+#[cfg(feature = "server")]
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
+#[cfg(feature = "server")]
 use serde::{Deserialize, Serialize};
 
-#[tokio::main]
-async fn main() {
+#[cfg(feature = "server")]
+async fn launch_server(component: fn() -> Element) {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
     // message::test();
 
     let node = Arc::new(Mutex::new(
@@ -188,53 +210,41 @@ async fn main() {
         }
     });
 
-    #[cfg(not(feature = "client_only"))]
-    {
-        println!("Starting server");
-        tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                    format!("{}=debug,tower_http=debug", env!("CARGO_CRATE_NAME")).into()
-                }),
-            )
-            .with(tracing_subscriber::fmt::layer())
-            .init();
-        let assets_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets");
-        let listen_port = node.lock().unwrap().listen_port;
-        let app = Router::new()
-            .fallback_service(ServeDir::new(assets_dir).append_index_html_on_directories(true))
-            .route("/health", get(|| async { "OK" }))
-            .route("/info", get(info_handler))
-            .route("/send", post(send_handler))
-            .route("/ws", any(server::ws_handler))
-            .with_state(Arc::clone(&node))
-            .layer(
-                TraceLayer::new_for_http()
-                    .make_span_with(DefaultMakeSpan::default().include_headers(true)),
-            );
+    // Get the address the server should run on. If the CLI is running, the CLI proxies fullstack into the main address
+    // and we use the generated address the CLI gives us
+    let ip =
+        dioxus::cli_config::server_ip().unwrap_or_else(|| IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+    let port = dioxus::cli_config::server_port().unwrap_or(8080);
+    let address = SocketAddr::new(ip, port);
+    let listener = tokio::net::TcpListener::bind(address).await.unwrap();
+    let router = Router::new()
+        .route("/health", get(|| async { "OK" }))
+        .route("/info", get(info_handler))
+        .route("/send", post(send_handler))
+        .route("/ws", any(server::ws_handler))
+        .serve_dioxus_application(ServeConfig::new().unwrap(), App)
+        .with_state(Arc::clone(&node))
+        .into_make_service();
+    axum::serve(listener, router).await.unwrap();
+}
 
-        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", listen_port))
-            .await
-            .unwrap();
-        tracing::debug!("listening on {}", listener.local_addr().unwrap());
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .unwrap();
-    }
+fn main() {
+    #[cfg(feature = "web")]
+    // Hydrate the application on the client
+    dioxus::launch(App);
 
-    #[cfg(feature = "client_only")]
+    // Launch axum on the server
+    #[cfg(feature = "server")]
     {
-        println!("Running in client-only mode. Press Ctrl+C to exit.");
-        tokio::signal::ctrl_c()
-            .await
-            .expect("Failed to listen for ctrl-c");
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                launch_server(App).await;
+            });
     }
 }
 
-#[cfg(not(feature = "client_only"))]
+#[cfg(feature = "server")]
 async fn info_handler(State(node): State<Arc<Mutex<Node>>>) -> Json<SignedPublicNode> {
     let node_guard = node.lock().unwrap();
     let public_node = PublicNode::from(&*node_guard);
@@ -250,13 +260,13 @@ async fn info_handler(State(node): State<Arc<Mutex<Node>>>) -> Json<SignedPublic
 
     Json(response)
 }
-#[cfg(not(feature = "client_only"))]
+#[cfg(feature = "server")]
 #[derive(Deserialize)]
 struct UserMessage {
     to: String,
     text: String,
 }
-#[cfg(not(feature = "client_only"))]
+#[cfg(feature = "server")]
 async fn send_handler(
     State(node): State<Arc<Mutex<Node>>>,
     Json(payload): Json<UserMessage>,
@@ -318,4 +328,44 @@ async fn send_handler(
     }
 
     Ok("all good sir".to_string())
+}
+
+
+#[component]
+fn App() -> Element {
+    rsx! {
+        body { class: "min-h-screen bg-gradient-to-br from-[var(--ctp-base)] via-[var(--ctp-mantle)] to-[var(--ctp-crust)]" }
+        document::Link { rel: "icon", href: FAVICON }
+        document::Link { rel: "stylesheet", href: MAIN_CSS }
+        document::Link { rel: "stylesheet", href: TAILWIND_CSS }
+        Router::<Route> {}
+    }
+}
+
+#[component]
+fn Navbar() -> Element {
+    rsx! {
+        nav {
+            class: "glass-strong p-3 shadow-lg sticky top-0 z-50",
+            div {
+                class: "container mx-auto flex justify-between items-center",
+                div {
+                    class: "flex items-center gap-2",
+                    svg { 
+                        height: "24px", 
+                        view_box: "0 0 576 512", 
+                        xmlns: "http://www.w3.org/2000/svg",
+                        fill: "currentColor",
+                        class: "text-[var(--ctp-text)]",
+                        path { d: "M64 0C28.7 0 0 28.7 0 64L0 416c0 35.3 28.7 64 64 64l16 0 16 32 64 0 16-32 224 0 16 32 64 0 16-32 16 0c35.3 0 64-28.7 64-64l0-352c0-35.3-28.7-64-64-64L64 0zM224 320a80 80 0 1 0 0-160 80 80 0 1 0 0 160zm0-240a160 160 0 1 1 0 320 160 160 0 1 1 0-320zM480 221.3L480 336c0 8.8-7.2 16-16 16s-16-7.2-16-16l0-114.7c-18.6-6.6-32-24.4-32-45.3c0-26.5 21.5-48 48-48s48 21.5 48 48c0 20.9-13.4 38.7-32 45.3z" }
+                    }
+                    h1 {
+                        class: "text-xl font-bold text-[var(--ctp-text)]",
+                        "VaultMaxxing"
+                    }
+                }
+            }
+        }
+        Outlet::<Route> {}
+    }
 }
