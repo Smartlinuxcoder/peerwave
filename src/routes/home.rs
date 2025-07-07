@@ -1,4 +1,4 @@
-use dioxus::{prelude::*};
+use dioxus::prelude::*;
 
 #[component]
 pub fn Home() -> Element {
@@ -333,10 +333,10 @@ pub fn Home() -> Element {
                 "windows-xp.jpg",
                 "winter-flowers.jpg",
                 "yohoho.jpg",
-                "zuchold-archtecture.jpg"
-              ];
+                "zuchold-archtecture.jpg",
+            ];
 
-            let random_index = 3;
+            let random_index = (js_sys::Math::random() * wallpapers.len() as f64) as usize;
             wallpaper_url.set(format!(
                 "https://raw.githubusercontent.com/orangci/walls-catppuccin-mocha/master/{}",
                 wallpapers[random_index]

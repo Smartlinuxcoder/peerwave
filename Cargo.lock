@@ -3604,6 +3604,7 @@ dependencies = [
  "futures",
  "futures-util",
  "headers",
+ "js-sys",
  "reqwest",
  "rsa",
  "serde",

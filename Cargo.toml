@@ -22,6 +22,7 @@ base64 = { version = "0.22.1", optional = true }
 reqwest = { version = "0.12.20", features = ["json"], optional = true }
 bincode = { version = "2.0.1", optional = true }
 aes-gcm = { version = "0.10.3", features = ["getrandom"], optional = true }
+js-sys = "0.3.77"
 
 [features]
 server = ["dioxus/server", "dep:axum", "dep:axum-extra", "dep:tower-http", "dep:tracing", "dep:tracing-subscriber", "dep:tokio", "dep:aes-gcm", "dep:serde", "dep:serde_json", "dep:futures", "dep:futures-util", "dep:headers", "dep:tokio-tungstenite", "dep:rsa", "dep:base64", "dep:reqwest", "dep:bincode"]
