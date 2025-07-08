@@ -210,8 +210,6 @@ async fn launch_server(component: fn() -> Element) {
         }
     });
 
-    // Get the address the server should run on. If the CLI is running, the CLI proxies fullstack into the main address
-    // and we use the generated address the CLI gives us
     let ip =
         dioxus::cli_config::server_ip().unwrap_or_else(|| IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
     let port = dioxus::cli_config::server_port().unwrap_or(8080);
@@ -230,10 +228,8 @@ async fn launch_server(component: fn() -> Element) {
 
 fn main() {
     #[cfg(feature = "web")]
-    // Hydrate the application on the client
     dioxus::launch(App);
 
-    // Launch axum on the server
     #[cfg(feature = "server")]
     {
         tokio::runtime::Runtime::new()
