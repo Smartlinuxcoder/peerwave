@@ -7,7 +7,7 @@ WORKDIR /app
 FROM oven/bun:alpine AS bun
 COPY . .
 RUN bun install
-RUN bunx tailwindcss -i ./tailwind.css -o ./assets/tailwind.css
+RUN bunx tailwindcss -i ./john.css -o ./assets/tailwind.css
 
 FROM chef AS planner
 COPY . .
