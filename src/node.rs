@@ -1,9 +1,9 @@
+#[cfg(feature = "server")]
 use aes_gcm::{
-    Aes256Gcm, Nonce,
     aead::{Aead, AeadCore, KeyInit},
+    Aes256Gcm, Nonce,
 };
-use axum::extract::ws;
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 use rsa::{
     RsaPrivateKey, RsaPublicKey,
     pkcs1v15::{Signature, SigningKey, VerifyingKey},
@@ -14,9 +14,12 @@ use rsa::{
     traits::PublicKeyParts,
 };
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "server")]
 use std::fs;
-use std::path::Path;
+
 use std::collections::{HashSet, VecDeque};
+use std::path::Path;
 
 use crate::ws_types;
 
@@ -40,6 +43,7 @@ pub struct Node {
 }
 
 impl Node {
+    #[cfg(feature = "server")]
     pub fn load(path: &str) -> Result<Node, serde_json::Error> {
         let data = fs::read_to_string(path).expect("Unable to read file");
         let version = env!("CARGO_PKG_VERSION").to_string();
@@ -138,22 +142,36 @@ impl Node {
 
         let (encrypted_key, rest) = data.split_at(rsa_key_size);
         let (nonce_bytes, ciphertext) = rest.split_at(12);
-        let nonce = Nonce::from_slice(nonce_bytes);
 
         let padding = rsa::Pkcs1v15Encrypt;
         let symmetric_key = private_key.decrypt(padding, encrypted_key)?;
 
-        let cipher = Aes256Gcm::new_from_slice(&symmetric_key).map_err(|e| {
-            Box::<dyn std::error::Error>::from(format!("Failed to create AES cipher: {}", e))
-        })?;
-        let decrypted_data = cipher.decrypt(nonce, ciphertext).map_err(|e| {
-            Box::<dyn std::error::Error>::from(format!("AES decryption failed: {}", e))
-        })?;
+        #[cfg(feature = "server")]
+        {
+            let nonce = Nonce::from_slice(nonce_bytes);
+            let cipher = Aes256Gcm::new_from_slice(&symmetric_key).map_err(|e| {
+                Box::<dyn std::error::Error>::from(format!("Failed to create AES cipher: {}", e))
+            })?;
+            let decrypted_data = cipher.decrypt(nonce, ciphertext).map_err(|e| {
+                Box::<dyn std::error::Error>::from(format!("AES decryption failed: {}", e))
+            })?;
+            Ok(decrypted_data)
+        }
+        #[cfg(not(feature = "server"))]
+        {
+            let key: aes_wasm::aes256gcm::Key = symmetric_key
+                .try_into()
+                .map_err(|_| "Invalid key length for AES-256-GCM")?;
+            let nonce: aes_wasm::aes256gcm::Nonce = nonce_bytes
+                .try_into()
+                .map_err(|_| "Invalid nonce length for AES-256-GCM")?;
 
-        Ok(decrypted_data)
+            let decrypted_data = aes_wasm::aes256gcm::decrypt(ciphertext, &[], &key, nonce)
+                .map_err(|e| format!("AES decryption failed: {}", e))?;
+            Ok(decrypted_data)
+        }
     }
     pub fn route_payload(&self, destination: String) -> Result<Vec<String>, String> {
-
         if self.pubkey == destination {
             return Ok(vec![]);
         }
@@ -294,23 +312,49 @@ pub fn encrypt_with_pubkey(
     pubkey_b64: &str,
     data: &[u8],
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-    let key = Aes256Gcm::generate_key(&mut OsRng);
-    let cipher = Aes256Gcm::new(&key);
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-
-    let ciphertext = cipher
-        .encrypt(&nonce, data)
-        .map_err(|e| Box::<dyn std::error::Error>::from(format!("AES encryption failed: {}", e)))?;
-
     let pubkey_der = general_purpose::STANDARD.decode(pubkey_b64)?;
     let public_key = RsaPublicKey::from_public_key_der(&pubkey_der)?;
     let padding = rsa::Pkcs1v15Encrypt;
-    let encrypted_key = public_key.encrypt(&mut OsRng, padding, key.as_slice())?;
 
-    let mut combined = Vec::with_capacity(encrypted_key.len() + nonce.len() + ciphertext.len());
-    combined.extend_from_slice(&encrypted_key);
-    combined.extend_from_slice(nonce.as_slice());
-    combined.extend_from_slice(&ciphertext);
+    #[cfg(feature = "server")]
+    {
+        let key = Aes256Gcm::generate_key(&mut OsRng);
+        let cipher = Aes256Gcm::new(&key);
+        let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
 
-    Ok(combined)
+        let ciphertext = cipher.encrypt(&nonce, data).map_err(|e| {
+            Box::<dyn std::error::Error>::from(format!("AES encryption failed: {}", e))
+        })?;
+
+        let encrypted_key = public_key.encrypt(&mut OsRng, padding, key.as_slice())?;
+
+        let mut combined = Vec::with_capacity(encrypted_key.len() + nonce.len() + ciphertext.len());
+        combined.extend_from_slice(&encrypted_key);
+        combined.extend_from_slice(nonce.as_slice());
+        combined.extend_from_slice(&ciphertext);
+
+        Ok(combined)
+    }
+    #[cfg(not(feature = "server"))]
+    {
+        let mut key_bytes = [0u8; 32];
+        getrandom::getrandom(&mut key_bytes)?;
+        let key: aes_wasm::aes256gcm::Key = key_bytes;
+
+        let mut nonce_bytes = [0u8; 12];
+        getrandom::getrandom(&mut nonce_bytes)?;
+        let nonce: aes_wasm::aes256gcm::Nonce = nonce_bytes;
+
+        let ciphertext = aes_wasm::aes256gcm::encrypt(data, &[], &key, nonce);
+
+        let encrypted_key = public_key.encrypt(&mut OsRng, padding, &key)?;
+
+        let mut combined =
+            Vec::with_capacity(encrypted_key.len() + nonce.len() + ciphertext.len());
+        combined.extend_from_slice(&encrypted_key);
+        combined.extend_from_slice(&nonce);
+        combined.extend_from_slice(&ciphertext);
+
+        Ok(combined)
+    }
 }

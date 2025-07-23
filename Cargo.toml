@@ -12,7 +12,7 @@ serde_json = { version = "1.0.140", optional = true }
 futures = { version = "0.3", optional = true }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"], optional = true }
 headers = { version = "0.4.1", optional = true }
-tokio = { version = "1.45.1", features = ["full"], optional = true }
+tokio = { version = "1.45.1", optional = true }
 tokio-tungstenite = { version = "0.27.0", features = ["native-tls"], optional = true }
 tower-http = { version = "0.6.6", features = ["fs", "trace"], optional = true }
 tracing = { version = "0.1.41", optional = true }
@@ -22,12 +22,14 @@ base64 = { version = "0.22.1", optional = true }
 reqwest = { version = "0.12.20", features = ["json"], optional = true }
 bincode = { version = "2.0.1", optional = true }
 aes-gcm = { version = "0.10.3", features = ["getrandom"], optional = true }
+aes-wasm = { version = "0.1.17", optional = true }
 js-sys = "0.3.77"
+getrandom = { version = "0.2.16", features = ["js"] }
 
 [features]
-server = ["dioxus/server", "dep:axum", "dep:axum-extra", "dep:tower-http", "dep:tracing", "dep:tracing-subscriber", "dep:tokio", "dep:aes-gcm", "dep:serde", "dep:serde_json", "dep:futures", "dep:futures-util", "dep:headers", "dep:tokio-tungstenite", "dep:rsa", "dep:base64", "dep:reqwest", "dep:bincode"]
+server = ["dioxus/server", "dep:axum", "dep:axum-extra", "dep:tower-http", "dep:tracing", "dep:tracing-subscriber", "tokio/full", "dep:aes-gcm", "dep:serde", "dep:serde_json", "dep:futures", "dep:futures-util", "dep:headers", "dep:tokio-tungstenite", "dep:rsa", "dep:base64", "dep:reqwest", "dep:bincode"]
 default = ["web"]
-web = ["dioxus/web"]
+web = ["dioxus/web", "dep:bincode", "dep:aes-wasm", "dep:rsa", "dep:base64", "dep:serde", "dep:serde_json", "tokio/sync"]
 desktop = ["dioxus/desktop"]
 mobile = ["dioxus/mobile"]
 client_only = []
