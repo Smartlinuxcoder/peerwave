@@ -3613,6 +3613,7 @@ dependencies = [
  "futures",
  "futures-util",
  "getrandom 0.2.16",
+ "gloo-net",
  "headers",
  "js-sys",
  "reqwest",
@@ -3624,6 +3625,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]

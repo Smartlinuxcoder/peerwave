@@ -1,17 +1,17 @@
 #[cfg(feature = "server")]
-mod client;
+mod client_on_the_server;
 #[cfg(feature = "server")]
+mod server;
+#[cfg(feature = "server")]
+use node::{Node, PublicNode, SignedPublicNode};
+
+#[cfg(feature = "web")]
+mod client;
+
 mod message;
 mod node;
 mod ws_types;
-#[cfg(feature = "server")]
-mod server;
-
 mod routes;
-#[cfg(feature = "server")]
-use node::Node;
-#[cfg(feature = "server")]
-use node::{PublicNode, SignedPublicNode};
 use routes::home::Home;
 use dioxus::{document, prelude::*};
 
@@ -158,7 +158,7 @@ async fn crawl_network(node_clone: Arc<Mutex<Node>>) {
                                 let destination = peer_config.clone();
                                 let client_node_clone = Arc::clone(&node_clone);
                                 tokio::spawn(async move {
-                                    client::connect(destination, client_node_clone).await;
+                                    client_on_the_server::connect(destination, client_node_clone).await;
                                 });
                             }
                             Err(e) => {

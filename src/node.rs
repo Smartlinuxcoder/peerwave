@@ -17,9 +17,10 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "server")]
 use std::fs;
+#[cfg(feature = "server")]
+use std::path::Path;
 
 use std::collections::{HashSet, VecDeque};
-use std::path::Path;
 
 use crate::ws_types;
 
